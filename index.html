@@ -1,0 +1,1633 @@
+<!DOCTYPE html>
+<html class="dark" lang="UTF-8">
+<head>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>Project War Room</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,typography,container-queries"></script>
+    <link href="https://fonts.googleapis.com" rel="preconnect" />
+    <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect" />
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+    <style>
+        :root {
+            --obsidian: #ffffff;
+            --slate-base: #f8fafc;
+            --border: #e2e8f0;
+            --text-main: #0f172a;
+            --text-sub: #475569;
+            --primary: #0f172a;
+            --accent: #2563eb;
+            --accent-light: #eff6ff;
+            --emerald-bg: #f0fdf4;
+            --emerald-border: #bbf7d0;
+            --emerald-text: #166534;
+        }
+        body {
+            background-color: var(--obsidian);
+            color: var(--text-main);
+        }
+        .sidebar-border {
+            border-right: 1px solid var(--border);
+        }
+        .header-border {
+            border-bottom: 1px solid var(--border);
+        }
+        .glass-panel {
+            background: #ffffff;
+            border: 1px solid var(--border);
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+        }
+        .glass-card {
+            background: #ffffff;
+            border: 1px solid var(--border);
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+            transition: all 0.2s ease;
+        }
+        .glass-card:hover {
+            background: var(--slate-base);
+            border-color: #cbd5e1;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.08);
+        }
+        #createProjectModal, #artifactViewModal {
+            background: rgba(15, 23, 42, 0.3);
+            backdrop-filter: blur(4px);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+        #createProjectModal.open, #artifactViewModal.open {
+            opacity: 1;
+            pointer-events: all;
+        }
+        .sidebar-category-header {
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #94a3b8;
+            padding: 12px 16px 6px 16px;
+        }
+        .agent-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 16px;
+            border-radius: 10px;
+            font-size: 13px;
+            color: var(--text-sub);
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid transparent;
+        }
+        .agent-item:hover {
+            background: var(--slate-base);
+            color: var(--text-main);
+        }
+        .agent-item.active {
+            background: var(--accent-light);
+            border-color: rgba(37, 99, 235, 0.15);
+            color: var(--accent);
+            font-weight: 500;
+        }
+        .workspace-tab {
+            padding: 14px 24px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: var(--text-sub);
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .workspace-tab.active {
+            border-bottom-color: var(--primary);
+            color: var(--primary);
+        }
+    </style>
+</head>
+<body class="text-slate-800 font-['Outfit'] h-screen flex flex-col overflow-hidden bg-slate-50">
+
+    <!-- TOP HEADER -->
+    <header class="header-border h-16 flex items-center justify-between px-8 bg-white shrink-0">
+        <div class="flex items-center gap-3">
+            <span class="material-symbols-outlined text-slate-800 text-2xl font-bold">analytics</span>
+            <div class="flex items-center gap-2">
+                <h1 id="appHeaderTitle" class="font-['Orbitron'] text-sm font-black tracking-[0.2em] text-slate-900">
+                    Project War Room
+                </h1>
+                <span id="headerProjectName" class="text-xs text-slate-400 font-semibold border-l border-slate-200 pl-3 hidden"></span>
+            </div>
+        </div>
+        <div class="flex items-center gap-6 text-xs text-slate-600">
+            <div id="jiraStatus" class="flex items-center gap-1.5"></div>
+            <div class="w-8 h-8 rounded-full border border-slate-200 bg-slate-100 flex items-center justify-center overflow-hidden">
+                <span class="material-symbols-outlined text-slate-500 text-sm">person</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- MAIN BODY -->
+    <div class="flex-1 flex overflow-hidden">
+        
+        <!-- SIDEBAR (Hidden by default on Home landing page) -->
+        <aside id="mainSidebar" class="w-64 sidebar-border flex flex-col justify-between p-4 bg-white shrink-0 hidden">
+            <div class="space-y-6">
+                <!-- Active Project War Room Side Panel (Visible inside active workspace) -->
+                <div id="agentSelectPanel" class="space-y-2">
+                    <div class="sidebar-category-header">Project War Room</div>
+                    
+                    <button onclick="navigateHome()" class="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl bg-slate-100 text-slate-900 font-medium text-xs transition-all border border-slate-200">
+                        <span class="material-symbols-outlined text-base">home</span>
+                        Home
+                    </button>
+                    
+                    <!-- View categories -->
+                    <div class="sidebar-category-header mt-4">Workspace Views</div>
+                    <button id="tabButton_war-room" onclick="switchWorkspaceTab(this, 'war-room')" class="w-full flex items-center gap-3 px-4 py-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-50 text-xs transition-all workspace-tab">
+                        <span class="material-symbols-outlined text-base">forum</span>
+                        War Room
+                    </button>
+                    <button id="tabButton_knowledge-base" onclick="switchWorkspaceTab(this, 'knowledge-base')" class="w-full flex items-center gap-3 px-4 py-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-50 text-xs transition-all workspace-tab">
+                        <span class="material-symbols-outlined text-base">library_books</span>
+                        Knowledge Base
+                    </button>
+                    <button id="tabButton_jira-stories" onclick="switchWorkspaceTab(this, 'jira-stories')" class="w-full flex items-center gap-3 px-4 py-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-50 text-xs transition-all workspace-tab">
+                        <span class="material-symbols-outlined text-base">view_kanban</span>
+                        Live Jira Board
+                    </button>
+                    <button id="tabButton_vault" onclick="switchWorkspaceTab(this, 'vault')" class="w-full flex items-center gap-3 px-4 py-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-50 text-xs transition-all workspace-tab">
+                        <span class="material-symbols-outlined text-base">folder_zip</span>
+                        Artifacts
+                    </button>
+                    <button id="tabButton_test-scripts" onclick="switchWorkspaceTab(this, 'test-scripts')" class="w-full flex items-center gap-3 px-4 py-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-50 text-xs transition-all workspace-tab">
+                        <span class="material-symbols-outlined text-base">integration_instructions</span>
+                        Change Log
+                    </button>
+                    <button class="w-full flex items-center gap-3 px-4 py-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-50 text-xs transition-all workspace-tab">
+                        <span class="material-symbols-outlined text-base">analytics</span>
+                        Reporting
+                    </button>
+                </div>
+            </div>
+            
+        </aside>
+
+        <!-- MAIN CONTENT AREA -->
+        <main class="flex-1 flex flex-col overflow-hidden relative bg-slate-50">
+
+            <!-- HOME PAGE VIEW -->
+            <div id="homeView" class="flex-1 overflow-y-auto p-6 space-y-4">
+                <div class="max-w-5xl mx-auto space-y-6">
+                    <!-- Brand Banner Header -->
+                    <div class="text-center py-4 space-y-2">
+                        <h2 class="text-3xl font-extrabold tracking-tight text-slate-900 font-['Orbitron']">Project War Room</h2>
+                        <div class="flex items-center justify-center gap-6 text-[10px] text-slate-500 font-medium">
+                            <span>Powered by</span>
+                            <div class="flex items-center gap-4">
+                                <!-- Jira Icon -->
+                                <div class="flex items-center gap-1 hover:text-blue-600 transition-colors" title="Jira Software">
+                                    <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M11.75 0a.75.75 0 00-.53.22L6.15 5.29a.75.75 0 000 1.06L11.22 11.4a.75.75 0 001.06 0l5.07-5.07a.75.75 0 000-1.06L12.28.22a.75.75 0 00-.53-.22zM2.87 9.13a.75.75 0 00-.53.22L.22 11.47a.75.75 0 000 1.06l5.07 5.07a.75.75 0 001.06 0l5.07-5.07a.75.75 0 000-1.06l-5.07-5.07a.75.75 0 00-.53-.22zm18.26 0a.75.75 0 00-.53.22l-5.07 5.07a.75.75 0 000 1.06l5.07 5.07a.75.75 0 001.06 0l2.12-2.12a.75.75 0 000-1.06l-2.12-2.12a.75.75 0 00-.53-.22z"/></svg>
+                                    <span>Jira</span>
+                                </div>
+                                <!-- Google Gemini Icon -->
+                                <div class="flex items-center gap-1 hover:text-purple-600 transition-colors" title="Google Gemini">
+                                    <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M12 0L9.16 9.16L0 12L9.16 14.84L12 24L14.84 14.84L24 12L14.84 9.16L12 0Z"/></svg>
+                                    <span>Gemini</span>
+                                </div>
+                                <!-- Miro Icon -->
+                                <div class="flex items-center gap-1 hover:text-amber-500 transition-colors" title="Miro Visual Collaboration">
+                                    <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm1 14h-2v-2h2v2zm0-4h-2V7h2v5z"/></svg>
+                                    <span>Miro</span>
+                                </div>
+                                <!-- GitHub Icon -->
+                                <div class="flex items-center gap-1 hover:text-slate-900 transition-colors" title="GitHub Source Control">
+                                    <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.385.6.11.82-.26.82-.577v-2.234c-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.43.372.82 1.102.82 2.222v3.293c0 .319.22.694.825.576C20.565 21.795 24 17.3 24 12c0-6.63-5.37-12-12-12z"/></svg>
+                                    <span>GitHub</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- QUICK ACTIONS -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <!-- Create Project Button -->
+                        <button onclick="toggleModal(true)" class="group flex flex-col items-center justify-center p-8 rounded-2xl border border-dashed border-slate-300 hover:border-slate-400 hover:bg-white transition-all text-center h-48 bg-white">
+                            <div class="w-12 h-12 rounded-full bg-slate-50 border border-slate-200 group-hover:border-slate-300 flex items-center justify-center mb-4 transition-all">
+                                <span class="material-symbols-outlined text-slate-500 group-hover:text-slate-800 transition-colors">add</span>
+                            </div>
+                            <span class="text-sm font-semibold text-slate-700 group-hover:text-slate-900 transition-colors">Create Project</span>
+                            <span class="text-[10px] text-slate-400 mt-1">Start a new BA Workspace</span>
+                        </button>
+
+                        <div class="p-6 rounded-2xl bg-white border border-slate-200 flex flex-col justify-between h-48 shadow-sm">
+                            <div class="flex items-center justify-between">
+                                <span class="material-symbols-outlined text-indigo-500">description</span>
+                                <span class="text-[10px] text-slate-400 font-mono">WORKSPACE AUTO-SAVE</span>
+                            </div>
+                            <div>
+                                <h4 class="text-sm font-semibold text-slate-800">Document Generation</h4>
+                                <p class="text-[11px] text-slate-500 mt-1">Ready to export BRD, FRD, and Use Cases dynamically as you prompt.</p>
+                            </div>
+                        </div>
+
+                        <div class="p-6 rounded-2xl bg-white border border-slate-200 flex flex-col justify-between h-48 shadow-sm">
+                            <div class="flex items-center justify-between">
+                                <span class="material-symbols-outlined text-slate-800">sync_alt</span>
+                                <span class="text-[10px] text-slate-400 font-mono">JIRA ACTIVE LINK</span>
+                            </div>
+                            <div>
+                                <h4 class="text-sm font-semibold text-slate-800">Jira Active Link</h4>
+                                <p class="text-[11px] text-slate-500 mt-1">Automatically maps synthesized User Stories and Acceptance Criteria to sprint boards.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- PROJECTS SECTION -->
+                    <div class="space-y-4">
+                        <div class="flex items-center justify-between">
+                            <h3 class="text-xs font-bold uppercase tracking-widest text-slate-400 font-semibold">My Workspace</h3>
+                            <span class="text-[10px] text-slate-500" id="projectCount">0 projects</span>
+                        </div>
+                        <div id="projectsList" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PROJECT WORKSPACE VIEW (Hidden initially) -->
+            <div id="workspaceView" class="flex-1 flex flex-col overflow-hidden hidden bg-slate-50">
+                <!-- Workspace Panels Content -->
+                <div class="flex-1 flex overflow-hidden">
+                    <!-- Left: Main Prompt / Chat Workspace (Active only in War Room) -->
+                    <div id="chatInterfaceContainer" class="flex-1 flex flex-col p-6 space-y-6 overflow-hidden bg-slate-50">
+                        
+                        <!-- Chat messages stream log -->
+                        <div id="chatStreamLog" class="flex-1 overflow-y-auto space-y-4 p-4 rounded-2xl bg-white border border-slate-200 shadow-sm no-scrollbar font-sans">
+                            <div class="flex gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200 max-w-[85%]">
+                                <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center shrink-0">
+                                    <span class="material-symbols-outlined text-slate-700 text-base">smart_toy</span>
+                                </div>
+                                <div class="space-y-1">
+                                    <div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Business Analyst</div>
+                                    <div class="text-xs text-slate-700 leading-relaxed">
+                                        Welcome to the Banking Deposit page workspace! Describe your requirements or deposit screen functionalities below to generate documentation, user stories, process flow diagrams, and validation test scripts.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Input container bar -->
+                        <div class="shrink-0">
+                            <div class="bg-white border border-slate-200 rounded-full p-2 pl-6 flex items-center gap-4 shadow-md">
+                                <span class="material-symbols-outlined text-slate-400 text-sm">auto_awesome</span>
+                                <input id="workspacePromptInput" class="bg-transparent border-none focus:ring-0 text-xs flex-1 text-slate-800 placeholder-slate-400 outline-none w-full" placeholder="Describe the feature or prompt the active agent..." type="text" />
+                                <button onclick="sendWorkspacePrompt()" class="px-6 py-2.5 rounded-full bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest hover:bg-slate-850 transition-all flex items-center gap-2 group">
+                                    Send
+                                    <span class="material-symbols-outlined text-xs group-hover:translate-x-0.5 transition-transform">send</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Left: Non-Chat Static View Layout -->
+                    <div id="nonChatInterfaceContainer" class="flex-1 flex flex-col p-6 space-y-4 overflow-y-auto bg-slate-50 hidden">
+                        <!-- Top status card info -->
+                        <div class="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-3">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-800" id="nonChatIconBox">
+                                    <span class="material-symbols-outlined text-lg" id="nonChatHeaderIcon">library_books</span>
+                                </div>
+                                <div>
+                                    <h4 class="text-sm font-bold uppercase tracking-wider text-slate-700" id="nonChatHeaderLabel">Knowledge Base</h4>
+                                    <p class="text-[11px] text-slate-400" id="nonChatHeaderDesc">Workspace active reference documents guidelines context</p>
+                                </div>
+                            </div>
+                            <!-- Tab view custom dynamic content injection wrapper -->
+                            <div class="mt-4 pt-4 border-t border-slate-200 text-xs text-slate-800 leading-relaxed font-sans" id="nonChatViewContent">
+                                <!-- Dynamically injected tab details list / forms -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right sidebar: Project Team panel inside the active Workspace -->
+                    <aside id="workspaceRightSidebar" class="w-80 sidebar-border flex flex-col overflow-hidden bg-white">
+                        <div class="p-4 border-b border-slate-200 shrink-0">
+                            <div class="flex items-center gap-2">
+                                <span class="material-symbols-outlined text-slate-800 text-sm">groups</span>
+                                <h4 class="text-xs font-bold uppercase tracking-wider text-slate-700">Project Team</h4>
+                            </div>
+                        </div>
+
+                        <!-- Team List View -->
+                        <div class="flex-1 overflow-y-auto p-4 space-y-3 no-scrollbar bg-slate-50" id="workspaceRightPanel">
+                            <!-- Populated dynamically with agents -->
+                        </div>
+                    </aside>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- CREATE PROJECT MODAL -->
+    <div id="createProjectModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div class="modal-box w-full max-w-md p-6 rounded-2xl border border-slate-200 bg-white shadow-2xl space-y-6">
+            <div class="flex items-center justify-between">
+                <h3 class="font-['Orbitron'] text-sm font-bold tracking-widest text-slate-900">New Project Workspace</h3>
+                <button onclick="toggleModal(false)" class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center hover:bg-slate-200 transition-all text-slate-500">
+                    <span class="material-symbols-outlined text-sm">close</span>
+                </button>
+            </div>
+            
+            <div class="space-y-4">
+                <div class="space-y-1.5">
+                    <label class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Project Name</label>
+                    <input id="projectName" type="text" placeholder="e.g. Banking Deposit page" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-slate-300 transition-colors" />
+                </div>
+                <div class="space-y-1.5">
+                    <label class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Project Key</label>
+                    <input id="projectKey" type="text" placeholder="e.g. KAN" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-slate-300 transition-colors" />
+                </div>
+                <div class="space-y-1.5">
+                    <label class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Description</label>
+                    <textarea id="projectDesc" rows="3" placeholder="Define banking deposit page scopes..." class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-slate-300 transition-colors"></textarea>
+                </div>
+            </div>
+
+            <div class="flex gap-3 pt-2">
+                <button onclick="toggleModal(false)" class="flex-1 py-3 rounded-xl bg-slate-100 text-xs font-semibold text-slate-600 hover:bg-slate-200 transition-all">
+                    Cancel
+                </button>
+                <button onclick="createProject()" class="flex-1 py-3 rounded-xl bg-slate-900 text-white font-black text-xs uppercase tracking-widest hover:bg-slate-850 transition-all">
+                    Create
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ARTIFACT VIEWER MODAL -->
+    <div id="artifactViewModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div class="modal-box w-full max-w-2xl max-h-[85vh] rounded-2xl border border-slate-200 bg-white shadow-2xl flex flex-col overflow-hidden">
+            <div class="flex items-center justify-between p-5 border-b border-slate-200 shrink-0">
+                <h3 id="artifactViewTitle" class="font-['Orbitron'] text-xs font-bold tracking-widest text-slate-900 truncate pr-4"></h3>
+                <div class="flex items-center gap-2 shrink-0">
+                    <a id="artifactViewDownload" href="#" target="_blank" class="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-[9px] font-bold uppercase tracking-wider hover:bg-slate-200 transition-all flex items-center gap-1">
+                        Download <span class="material-symbols-outlined text-[10px]">download</span>
+                    </a>
+                    <button onclick="toggleArtifactModal(false)" class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center hover:bg-slate-200 transition-all text-slate-500">
+                        <span class="material-symbols-outlined text-sm">close</span>
+                    </button>
+                </div>
+            </div>
+            <div id="artifactViewBody" class="p-6 overflow-y-auto text-xs leading-relaxed"></div>
+        </div>
+    </div>
+
+    <!-- JS CONTROL -->
+    <script>
+        // Load initial workspaces from localStorage or default template
+        let defaultWorkspaces = [
+            { id: 101, name: "Banking Deposit page", key: "KAN", desc: "Digital banking customer deposit workspace for checking, savings, and certificate accounts.", updated: "Just now" }
+        ];
+
+        let workspaces = JSON.parse(localStorage.getItem('nexus_workspaces')) || defaultWorkspaces;
+
+        let activeProject = null;
+
+        function scrollToBottom() {
+            const stream = document.getElementById('chatStreamLog');
+            if (stream) {
+                setTimeout(() => {
+                    stream.scrollTop = stream.scrollHeight;
+                }, 80);
+            }
+        }
+
+        function saveWorkspacesToStorage() {
+            localStorage.setItem('nexus_workspaces', JSON.stringify(workspaces));
+        }
+
+        // Persist the active project's generated content so it survives a page refresh
+        function persistProjectState() {
+            if (!activeProject) return;
+            activeProject.chatHistory = chatHistory || [];
+            activeProject.vaultFiles = window.vaultFiles || [];
+            activeProject.testScripts = window.testScripts || [];
+            activeProject.recommendedStories = window.recommendedStories || [];
+            activeProject.confluenceSynced = window.confluenceSynced || [];
+            activeProject.agentContributions = window.agentContributions || [];
+            activeProject.selectedDocs = window.selectedDocs || [];
+            activeProject.activeAgentsToRun = window.activeAgentsToRun || [];
+
+            const idx = workspaces.findIndex(w => w.id === activeProject.id);
+            if (idx !== -1) {
+                workspaces[idx] = activeProject;
+                saveWorkspacesToStorage();
+            }
+        }
+
+        function appendReadOnlyChatBubble(role, text) {
+            const stream = document.getElementById('chatStreamLog');
+            const div = document.createElement('div');
+            if (role === 'user') {
+                div.className = "flex gap-4 p-4 rounded-xl bg-slate-100 max-w-[85%] ml-auto border border-slate-200 justify-end";
+                div.innerHTML = `
+                    <div class="space-y-1 text-right">
+                        <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">You</div>
+                        <div class="text-xs text-slate-800">${text}</div>
+                    </div>
+                    <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center shrink-0">
+                        <span class="material-symbols-outlined text-slate-600 text-base">person</span>
+                    </div>
+                `;
+            } else {
+                div.className = "flex gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200 max-w-[85%]";
+                div.innerHTML = `
+                    <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center shrink-0">
+                        <span class="material-symbols-outlined text-slate-700 text-base">smart_toy</span>
+                    </div>
+                    <div class="space-y-1">
+                        <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Business Analyst</div>
+                        <div class="text-xs text-slate-700 leading-relaxed">${text.replace(/\n/g, '<br>')}</div>
+                    </div>
+                `;
+            }
+            stream.appendChild(div);
+        }
+
+        function toggleModal(show) {
+            const m = document.getElementById('createProjectModal');
+            if (show) {
+                m.classList.add('open');
+                document.getElementById('projectName').focus();
+            } else {
+                m.classList.remove('open');
+            }
+        }
+
+        function renderProjects() {
+            const list = document.getElementById('projectsList');
+            const count = document.getElementById('projectCount');
+            count.textContent = `${workspaces.length} project(s)`;
+
+            list.innerHTML = workspaces.map(w => `
+                <div onclick="openWorkspace(${w.id})" class="p-6 rounded-2xl glass-card flex flex-col justify-between h-48 cursor-pointer relative overflow-hidden group bg-white">
+                    <div class="flex items-start justify-between relative z-10">
+                        <div>
+                            <span class="text-[9px] font-bold font-mono px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-white">${w.key}</span>
+                            <!-- Project name shows always -->
+                            <h4 class="text-base font-bold text-slate-800 mt-3 transition-colors">${w.name}</h4>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button onclick="event.stopPropagation(); deleteProject(${w.id})" class="w-7 h-7 rounded-full bg-rose-50 hover:bg-rose-100 text-rose-600 flex items-center justify-center transition-all" title="Delete Project">
+                                <span class="material-symbols-outlined text-xs">delete</span>
+                            </button>
+                            <span class="material-symbols-outlined text-slate-400 text-sm group-hover:text-slate-700 transition-colors">arrow_forward</span>
+                        </div>
+                    </div>
+                    <div class="relative z-10">
+                        <p class="text-xs text-slate-500 line-clamp-2">${w.desc}</p>
+                        <div class="flex items-center gap-1.5 mt-4 text-[10px] text-slate-400">
+                            <span class="material-symbols-outlined text-xs">schedule</span>
+                            Updated ${w.updated}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function deleteProject(id) {
+            if (confirm("Are you sure you want to delete this project workspace? All local generated items will be cleared.")) {
+                workspaces = workspaces.filter(w => w.id !== id);
+                saveWorkspacesToStorage();
+                renderProjects();
+            }
+        }
+
+        function createProject() {
+            const name = document.getElementById('projectName').value.trim();
+            const key = document.getElementById('projectKey').value.trim().toUpperCase();
+            const desc = document.getElementById('projectDesc').value.trim();
+
+            if (!name || !key) return alert("Project Name and Key are required");
+
+            const newProj = {
+                id: Date.now(),
+                name: name,
+                key: key,
+                desc: desc || "No description provided.",
+                updated: "Just now"
+            };
+
+            workspaces.unshift(newProj);
+            saveWorkspacesToStorage();
+            renderProjects();
+            toggleModal(false);
+
+            document.getElementById('projectName').value = '';
+            document.getElementById('projectKey').value = '';
+            document.getElementById('projectDesc').value = '';
+        }
+
+        const allAgents = [
+            { id: 'ba', name: 'Business Analyst', icon: 'psychology', color: 'text-slate-800', isLead: true },
+            { id: 'po', name: 'Product Owner', icon: 'assignment_ind', color: 'text-indigo-600' },
+            { id: 'ux', name: 'UI/UX Designer', icon: 'palette', color: 'text-pink-600' },
+            { id: 'arch', name: 'Systems Architect', icon: 'hub', color: 'text-blue-600' },
+            { id: 'dev', name: 'Lead Developer', icon: 'code', color: 'text-teal-600' },
+            { id: 'qa', name: 'QA Engineer', icon: 'shield', color: 'text-amber-600' }
+        ];
+
+        function updateRightPanel(activeAgentNames = []) {
+            const panel = document.getElementById('workspaceRightPanel');
+            if (!panel) return;
+            panel.innerHTML = allAgents.map(agent => {
+                const isActive = agent.isLead || activeAgentNames.includes(agent.name);
+                const statusColor = isActive ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-slate-350';
+                const statusText = isActive ? 'Active' : 'Idle';
+                const statusTextColor = isActive ? 'text-emerald-700 font-bold' : 'text-slate-400';
+                return `
+                    <div class="p-3 rounded-xl bg-white border border-slate-200 shadow-sm flex items-center justify-between">
+                        <div class="flex items-center gap-3">
+                            <div class="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center border border-slate-100">
+                                <span class="material-symbols-outlined ${agent.color} text-sm">${agent.icon}</span>
+                            </div>
+                            <div>
+                                <div class="text-[11px] font-bold text-slate-800">${agent.name}</div>
+                                <div class="text-[9px] text-slate-400">${agent.isLead ? 'Facilitator' : 'Specialist'}</div>
+                            </div>
+                        </div>
+                        <div class="flex flex-col items-end">
+                            <div class="flex items-center gap-1.5">
+                                <span class="w-1.5 h-1.5 rounded-full ${statusColor}"></span>
+                                <span class="text-[9px] ${statusTextColor}">${statusText}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function openWorkspace(id) {
+            const proj = workspaces.find(w => w.id === id);
+            if (!proj) return;
+            activeProject = proj;
+
+            // Restore this project's persisted state (survives page refresh)
+            chatHistory = proj.chatHistory || [];
+            window.vaultFiles = proj.vaultFiles || [];
+            window.testScripts = proj.testScripts || [];
+            window.recommendedStories = proj.recommendedStories || [];
+            window.confluenceSynced = proj.confluenceSynced || [];
+            window.agentContributions = proj.agentContributions || [];
+            window.selectedDocs = proj.selectedDocs || [];
+            window.activeAgentsToRun = proj.activeAgentsToRun || [];
+
+            document.getElementById('chatStreamLog').innerHTML = `
+                <div class="flex gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200 max-w-[85%]">
+                    <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center shrink-0">
+                        <span class="material-symbols-outlined text-slate-700 text-base">smart_toy</span>
+                    </div>
+                    <div class="space-y-1">
+                        <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Business Analyst</div>
+                        <div class="text-xs text-slate-700 leading-relaxed">
+                            Welcome to the ${proj.name} workspace! Describe your requirements or system functionality below to generate documentation, user stories, process flow diagrams, and validation test scripts.
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Replay any previously exchanged chat turns as plain read-only bubbles
+            chatHistory.forEach(turn => appendReadOnlyChatBubble(turn.role, turn.text));
+
+            const activeAgentNames = (window.activeAgentsToRun || []).map(a => a.name);
+            updateRightPanel(activeAgentNames);
+
+            document.getElementById('appHeaderTitle').textContent = "Project War Room";
+            const subName = document.getElementById('headerProjectName');
+            subName.textContent = proj.name;
+            subName.classList.remove('hidden');
+
+            document.getElementById('homeView').classList.add('hidden');
+            document.getElementById('workspaceView').classList.remove('hidden');
+
+            // Show main sidebar
+            document.getElementById('mainSidebar').classList.remove('hidden');
+
+            // Default to War Room Tab initially
+            switchWorkspaceTab(null, 'war-room');
+        }
+
+        function navigateHome() {
+            activeProject = null;
+            document.getElementById('headerProjectName').classList.add('hidden');
+
+            document.getElementById('workspaceView').classList.add('hidden');
+            document.getElementById('homeView').classList.remove('hidden');
+
+            // Hide main sidebar
+            document.getElementById('mainSidebar').classList.add('hidden');
+        }
+
+        function selectAgent(el, agentName) {
+            document.querySelectorAll('#agentSelectPanel .agent-item').forEach(item => item.classList.remove('active'));
+            el.classList.add('active');
+            document.getElementById('activeWorkspaceAgent').textContent = "Active Role: " + agentName;
+
+            const stream = document.getElementById('chatStreamLog');
+            const div = document.createElement('div');
+            div.className = "flex gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200 max-w-[85%] animate-fadeIn";
+            div.innerHTML = `
+                <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center shrink-0">
+                    <span class="material-symbols-outlined text-slate-600 text-base">account_circle</span>
+                </div>
+                <div class="space-y-1">
+                    <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">${agentName}</div>
+                    <div class="text-xs text-slate-500 italic">Agent initialized. Ready to process requirements.</div>
+                </div>
+            `;
+            stream.appendChild(div);
+            scrollToBottom();
+        }
+
+        function switchWorkspaceTab(el, tabName) {
+            if (!el) {
+                el = document.getElementById('tabButton_' + tabName);
+            }
+            if (el) {
+                document.querySelectorAll('.workspace-tab').forEach(tab => {
+                    tab.classList.remove('bg-slate-900', 'text-white', 'font-semibold');
+                    tab.classList.add('text-slate-500', 'hover:text-slate-800', 'hover:bg-slate-50');
+                });
+                el.classList.remove('text-slate-500', 'hover:text-slate-800', 'hover:bg-slate-50');
+                el.classList.add('bg-slate-900', 'text-white', 'font-semibold');
+            }
+
+            const chatContainer = document.getElementById('chatInterfaceContainer');
+            const staticContainer = document.getElementById('nonChatInterfaceContainer');
+            const rightSidebar = document.getElementById('workspaceRightSidebar');
+
+            if (tabName === 'war-room') {
+                // Show chat view, hide static view
+                chatContainer.classList.remove('hidden');
+                staticContainer.classList.add('hidden');
+                if (rightSidebar) rightSidebar.classList.remove('hidden');
+                return;
+            }
+
+            // Hide chat view, show static view
+            chatContainer.classList.add('hidden');
+            staticContainer.classList.remove('hidden');
+            if (rightSidebar) rightSidebar.classList.add('hidden');
+
+            let label = "KNOWLEDGE BASE";
+            let desc = "Workspace active reference documents guidelines context";
+            let icon = "library_books";
+            let htmlContent = "";
+
+            if (tabName === 'knowledge-base') {
+                icon = "library_books";
+                label = "KNOWLEDGE BASE";
+                desc = "Active guidelines reference context database";
+                const kbList = (activeProject && activeProject.knowledgeItems) || [];
+                const itemsHtml = kbList.length > 0 
+                    ? kbList.map((k, idx) => `
+                        <div class="p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-1">
+                            <div class="flex items-center justify-between text-[10px] font-bold text-slate-800">
+                                <span>${k.title}</span>
+                                <span class="text-slate-400 font-mono font-medium">${k.type}</span>
+                            </div>
+                            <p class="text-[11px] text-slate-600 leading-relaxed">${k.content}</p>
+                        </div>
+                    `).join('')
+                    : `<div class="text-center py-6 text-[10px] text-slate-400">No project guidelines loaded. Add reference documents below.</div>`;
+
+                htmlContent = `
+                       <div class="space-y-4">
+                           <div class="space-y-2 max-h-60 overflow-y-auto no-scrollbar">${itemsHtml}</div>
+                           <div class="p-4 border border-slate-200 rounded-xl bg-white space-y-3">
+                               <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Add Context Reference</div>
+                               <div class="space-y-2">
+                                   <input type="text" id="kbTitleInput" placeholder="Document Title (e.g. Teller Login Rules)" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-slate-300">
+                                   <textarea id="kbContentInput" placeholder="Paste requirements specs, security mandates, or target configurations..." rows="3" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-slate-300"></textarea>
+                               </div>
+                               <div class="flex justify-end">
+                                   <button onclick="addKnowledgeItem(this)" class="px-4 py-2 rounded-lg bg-slate-900 text-white text-[10px] font-black uppercase tracking-wider hover:bg-slate-800 transition-all flex items-center gap-1.5">
+                                       Load Reference <span class="material-symbols-outlined text-xs">add</span>
+                                   </button>
+                               </div>
+                           </div>
+                       </div>`;
+            } else if (tabName === 'jira-stories') {
+                icon = "view_kanban";
+                label = "JIRA SYNC";
+                desc = "Synchronize recommended user stories to sprint board";
+                const stories = window.recommendedStories || [];
+                if (stories.length > 0) {
+                    const checkboxes = stories.map((s, idx) => `
+                        <label class="flex items-start gap-3 p-3 rounded-lg bg-slate-50 border border-slate-200 cursor-pointer hover:bg-slate-100 transition-colors">
+                            <input type="checkbox" checked data-idx="${idx}" class="rounded border-slate-300 text-slate-900 focus:ring-slate-500 bg-white mt-0.5">
+                            <div class="space-y-1">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-200 border border-slate-300 text-slate-700">${s.issuetype}</span>
+                                    <span class="text-[8px] font-bold text-slate-400 uppercase">${s.priority}</span>
+                                </div>
+                                <div class="text-xs font-semibold text-slate-800">${s.summary}</div>
+                                <div class="text-[10px] text-slate-500">${s.description}</div>
+                            </div>
+                        </label>
+                    `).join('');
+
+                    htmlContent = `
+                           <div class="space-y-4">
+                               <div class="space-y-2 max-h-80 overflow-y-auto no-scrollbar">${checkboxes}</div>
+                               <div class="flex justify-end">
+                                   <button id="syncJiraStoriesBtn" onclick="syncSelectedJiraStories(this)" class="px-5 py-2.5 rounded-xl bg-slate-900 text-white text-[10px] font-black uppercase tracking-wider hover:bg-slate-800 transition-all flex items-center gap-2">
+                                       Approve & Sync to Jira
+                                       <span class="material-symbols-outlined text-xs">sync</span>
+                                   </button>
+                               </div>
+                           </div>`;
+                } else {
+                    htmlContent = "No recommended Jira stories generated yet. Finalize requirements in the War Room chat first.";
+                }
+                htmlContent += `
+                       <div class="mt-6 border-t border-slate-200 pt-6 space-y-3">
+                           <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Live Jira Board</div>
+                           <div id="workspaceJiraList" class="space-y-2 max-h-80 overflow-y-auto no-scrollbar"></div>
+                       </div>`;
+            } else if (tabName === 'test-scripts') {
+                icon = "integration_instructions";
+                label = "TEST SCRIPT";
+                desc = "Review generated manual and automated test script code cases";
+                const scripts = window.testScripts || [];
+                if (scripts.length > 0) {
+                    const links = scripts.map(s => `
+                        <div class="space-y-2">
+                            <a href="${s.url}" target="_blank" class="block p-3 rounded-lg bg-slate-50 border border-slate-200 text-blue-600 hover:bg-slate-100 transition-colors font-medium">${s.name}</a>
+                            <div class="p-4 rounded-xl bg-slate-100 border border-slate-200 text-[10px] font-mono text-slate-600 overflow-x-auto whitespace-pre">${s.content}</div>
+                        </div>
+                    `).join('');
+                    htmlContent = `
+                           <div class="space-y-4 max-h-96 overflow-y-auto no-scrollbar">${links}</div>`;
+                } else {
+                    htmlContent = "No test scripts generated yet. Finalize requirements in the War Room chat first.";
+                }
+            } else if (tabName === 'vault') {
+                icon = "folder_zip";
+                label = "ARTIFACTS";
+                desc = "Download specifications and view interactive process diagrams";
+                const files = window.vaultFiles || [];
+                if (files.length > 0) {
+                    const indexedFiles = files.map((f, i) => ({ ...f, _idx: i }));
+                    const specFiles = indexedFiles.filter(f => !f.name.endsWith('.html') && !f.external);
+                    const visualDiagrams = indexedFiles.filter(f => f.name.endsWith('.html'));
+                    const externalLinks = indexedFiles.filter(f => f.external);
+
+                    const specLinksHtml = specFiles.map(f => `
+                        <div ${f.content ? `draggable="true" ondragstart="handleArtifactDragStart(event, ${f._idx})"` : ''} class="flex items-center justify-between p-3 rounded-lg bg-slate-50 border border-slate-200 hover:bg-slate-100 transition-colors ${f.content ? 'cursor-grab active:cursor-grabbing' : ''}">
+                            <div class="flex items-center gap-2">
+                                ${f.content ? '<span class="material-symbols-outlined text-slate-300 text-sm" title="Drag to Confluence pane to publish">drag_indicator</span>' : ''}
+                                <span class="material-symbols-outlined text-slate-500 text-sm">description</span>
+                                <span class="text-xs font-semibold text-slate-800">${f.name}</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                ${f.content ? `
+                                <button onclick="viewArtifact(${f._idx})" class="px-3 py-1 rounded bg-white border border-slate-300 text-slate-700 text-[9px] font-bold uppercase tracking-wider hover:bg-slate-100 transition-all flex items-center gap-1">
+                                    View <span class="material-symbols-outlined text-[10px]">visibility</span>
+                                </button>` : ''}
+                                <a href="${f.url}" target="_blank" class="px-3 py-1 rounded bg-slate-900 text-white text-[9px] font-bold uppercase tracking-wider hover:bg-slate-800 transition-all flex items-center gap-1">
+                                    Download <span class="material-symbols-outlined text-[10px]">download</span>
+                                </a>
+                            </div>
+                        </div>
+                    `).join('');
+
+                    const externalLinksHtml = externalLinks.map(f => `
+                        <div class="flex items-center justify-between p-3 rounded-lg bg-amber-50/50 border border-amber-200/60 hover:bg-amber-100/30 transition-colors">
+                            <div class="flex items-center gap-2">
+                                <span class="material-symbols-outlined text-amber-600 text-sm">dashboard</span>
+                                <span class="text-xs font-semibold text-slate-800">${f.name}</span>
+                            </div>
+                            <a href="${f.url}" target="_blank" class="px-3 py-1 rounded bg-amber-600 text-white text-[9px] font-bold uppercase tracking-wider hover:bg-amber-700 transition-all flex items-center gap-1">
+                                Open Board <span class="material-symbols-outlined text-[10px]">open_in_new</span>
+                            </a>
+                        </div>
+                    `).join('');
+
+                    let visualPreviewHtml = "";
+                    if (visualDiagrams.length > 0) {
+                        visualPreviewHtml = `
+                            <div class="mt-6 border-t border-slate-200 pt-6 space-y-4">
+                                <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Interactive Diagram Previews</div>
+                                <div class="flex gap-2">
+                                    ${visualDiagrams.map((d, i) => `
+                                        <button onclick="document.getElementById('diagramIframe').src = '${d.url}'; this.parentElement.querySelectorAll('button').forEach(b => b.className = 'px-3 py-1.5 rounded-lg border border-slate-200 text-slate-500 text-[10px] font-semibold bg-white hover:bg-slate-50'); this.className = 'px-3 py-1.5 rounded-lg bg-slate-950 text-white text-[10px] font-semibold';" class="px-3 py-1.5 rounded-lg ${i === 0 ? 'bg-slate-950 text-white' : 'border border-slate-200 text-slate-500 bg-white hover:bg-slate-50'} text-[10px] font-semibold transition-all">
+                                            ${d.name.replace('.html', '').replace('_', ' ').replace('Visualization', '').replace('Interactive', '').trim()}
+                                        </button>
+                                    `).join('')}
+                                </div>
+                                <div class="rounded-xl border border-slate-200 overflow-hidden shadow-sm bg-[#0b0f19] h-[340px] relative">
+                                    <iframe id="diagramIframe" src="${visualDiagrams[0].url}" class="w-full h-full border-0"></iframe>
+                                </div>
+                            </div>
+                        `;
+                    }
+
+                    htmlContent = `
+                        <div class="flex gap-6 items-start">
+                            <div class="flex-1 min-w-0 space-y-4">
+                                <div class="space-y-2">
+                                    <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Specifications Vault</div>
+                                    <div class="grid grid-cols-1 gap-2">${specLinksHtml}</div>
+                                </div>
+
+                                ${externalLinksHtml ? `
+                                <div class="space-y-2 mt-4">
+                                    <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Interactive Miro Boards</div>
+                                    <div class="grid grid-cols-1 gap-2">${externalLinksHtml}</div>
+                                </div>
+                                ` : ''}
+
+                                ${visualPreviewHtml}
+
+                                <div class="mt-6 border-t border-slate-200 pt-6 flex gap-3">
+                                    <button onclick="publishToConfluence(this)" class="px-4 py-2.5 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-700 text-[10px] font-black uppercase tracking-wider hover:bg-indigo-100 transition-all flex items-center gap-1.5 shadow-sm">
+                                        Publish BRD to Confluence <span class="material-symbols-outlined text-xs">description</span>
+                                    </button>
+                                    <button onclick="syncToMiroBoard(this)" class="px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-black uppercase tracking-wider hover:bg-amber-100 transition-all flex items-center gap-1.5 shadow-sm">
+                                        Sync User Stories to Miro <span class="material-symbols-outlined text-xs">dashboard</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="w-72 shrink-0 space-y-3 sticky top-0">
+                                <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Confluence Sync</div>
+                                <div id="confluenceDropZone" ondragover="handleConfluenceDragOver(event)" ondragleave="handleConfluenceDragLeave(event)" ondrop="handleConfluenceDrop(event)" class="rounded-xl border-2 border-dashed border-indigo-200 bg-indigo-50/50 p-5 text-center space-y-2 transition-colors">
+                                    <span class="material-symbols-outlined text-indigo-400 text-2xl">cloud_upload</span>
+                                    <p class="text-[10px] text-indigo-600 font-semibold leading-relaxed">Drag a document here to publish it to Confluence</p>
+                                </div>
+                                <div id="confluenceSyncedList" class="space-y-2"></div>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    htmlContent = `
+                        <div class="text-center py-10 space-y-4">
+                            <div class="text-[11px] text-slate-400">No artifacts generated yet. Please finalize your requirements in the War Room chat first.</div>
+                            <div class="text-[10px] text-slate-400">Already generated documents in an earlier session? Reload them from disk:</div>
+                            <button onclick="recoverArtifactsFromWorkspace(this)" class="px-4 py-2 rounded-xl bg-slate-100 border border-slate-200 text-slate-600 text-[10px] font-black uppercase tracking-wider hover:bg-slate-200 transition-all inline-flex items-center gap-1.5">
+                                Recover from Workspace Folder <span class="material-symbols-outlined text-xs">restore</span>
+                            </button>
+                        </div>
+                    `;
+                }
+            }
+
+            // Set Header information
+            document.getElementById('nonChatHeaderIcon').textContent = icon;
+            document.getElementById('nonChatHeaderLabel').textContent = label;
+            document.getElementById('nonChatHeaderDesc').textContent = desc;
+            
+            // Set dynamic HTML content
+            document.getElementById('nonChatViewContent').innerHTML = htmlContent;
+
+            if (tabName === 'jira-stories') {
+                loadWorkspaceJira();
+            }
+            if (tabName === 'vault') {
+                renderConfluenceSyncedList();
+            }
+        }
+
+        let chatHistory = [];
+
+        async function sendWorkspacePrompt() {
+            const val = document.getElementById('workspacePromptInput').value.trim();
+            if (!val) return;
+
+            const stream = document.getElementById('chatStreamLog');
+            
+            const userDiv = document.createElement('div');
+            userDiv.className = "flex gap-4 p-4 rounded-xl bg-slate-100 max-w-[85%] ml-auto border border-slate-200 justify-end";
+            userDiv.innerHTML = `
+                <div class="space-y-1 text-right">
+                    <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">You</div>
+                    <div class="text-xs text-slate-800">${val}</div>
+                </div>
+                <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center shrink-0">
+                    <span class="material-symbols-outlined text-slate-600 text-base">person</span>
+                </div>
+            `;
+            stream.appendChild(userDiv);
+            document.getElementById('workspacePromptInput').value = '';
+            scrollToBottom();
+
+            chatHistory.push({ role: "user", text: val });
+
+            const typingDiv = document.createElement('div');
+            typingDiv.id = 'typingIndicator';
+            typingDiv.className = "flex gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200 max-w-[85%] animate-pulse";
+            typingDiv.innerHTML = `
+                <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center shrink-0">
+                    <span class="material-symbols-outlined text-slate-650 text-base">smart_toy</span>
+                </div>
+                <div class="space-y-1">
+                    <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Business Analyst</div>
+                    <div class="text-xs text-slate-400 italic">Analyzing requirements...</div>
+                </div>
+            `;
+            stream.appendChild(typingDiv);
+            scrollToBottom();
+
+            try {
+                const response = await fetch('/chat/ba', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: val, history: chatHistory, knowledge: (activeProject && activeProject.knowledgeItems) || [] })
+                });
+                const data = await response.json();
+                
+                const indicator = document.getElementById('typingIndicator');
+                if (indicator) indicator.remove();
+
+                const responseText = data.response || "Sorry, I encountered an issue processing that requirement.";
+
+                chatHistory.push({ role: "agent", text: responseText });
+                persistProjectState();
+
+                const responseDiv = document.createElement('div');
+                responseDiv.className = "flex gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200 max-w-[85%] animate-fadeIn flex-col";
+                
+                let formattedText = responseText;
+                let optionsHtml = "";
+
+                if (data.stage === "interview") {
+                    const optionRegex = /(?:^|\n)([A-E1-5])\.\s+([^\n]+)/g;
+                    const matches = [...responseText.matchAll(optionRegex)];
+                    if (matches.length > 0) {
+                        matches.forEach(m => {
+                            formattedText = formattedText.replace(m[0], "");
+                        });
+                        optionsHtml = `
+                            <div class="mt-3 grid grid-cols-1 gap-2">
+                                ${matches.map(m => `
+                                    <button onclick="submitChatChoice('${m[1]} - ${m[2].replace(/'/g, "\\'")}')" class="w-full text-left p-3 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 transition-all text-xs text-slate-700 flex items-center gap-2">
+                                        <span class="w-5 h-5 rounded-full bg-slate-100 text-slate-800 flex items-center justify-center font-bold text-[10px]">${m[1]}</span>
+                                        ${m[2]}
+                                    </button>
+                                `).join('')}
+                            </div>
+                        `;
+                    }
+                } else if (data.stage === "agent_list") {
+                    optionsHtml = `
+                        <div class="mt-4 space-y-4">
+                            <div class="space-y-2">
+                                <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Select Agents to Delegate</span>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <label class="flex items-center gap-2 p-2 rounded bg-white border border-slate-200 cursor-pointer text-xs text-slate-700">
+                                        <input type="checkbox" checked id="cb_po" class="rounded border-slate-300 text-slate-900 bg-slate-50"> Product Owner
+                                    </label>
+                                    <label class="flex items-center gap-2 p-2 rounded bg-white border border-slate-200 cursor-pointer text-xs text-slate-700">
+                                        <input type="checkbox" checked id="cb_ux" class="rounded border-slate-300 text-slate-900 bg-slate-50"> UI/UX Designer
+                                    </label>
+                                    <label class="flex items-center gap-2 p-2 rounded bg-white border border-slate-200 cursor-pointer text-xs text-slate-700">
+                                        <input type="checkbox" checked id="cb_arch" class="rounded border-slate-300 text-slate-900 bg-slate-50"> Systems Architect
+                                    </label>
+                                    <label class="flex items-center gap-2 p-2 rounded bg-white border border-slate-200 cursor-pointer text-xs text-slate-700">
+                                        <input type="checkbox" checked id="cb_dev" class="rounded border-slate-300 text-slate-900 bg-slate-50"> Lead Developer
+                                    </label>
+                                    <label class="flex items-center gap-2 p-2 rounded bg-white border border-slate-200 cursor-pointer text-xs text-slate-700">
+                                        <input type="checkbox" checked id="cb_qa" class="rounded border-slate-300 text-slate-900 bg-slate-50"> QA Engineer
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                responseDiv.innerHTML = `
+                    <div class="flex gap-4">
+                        <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center shrink-0 border border-slate-350">
+                            <span class="material-symbols-outlined text-slate-800 text-base">psychology</span>
+                        </div>
+                        <div class="space-y-1 flex-1">
+                            <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Business Analyst</div>
+                            <div class="text-xs text-slate-800 leading-relaxed">${formattedText.replace(/\n/g, '<br>')}</div>
+                            ${optionsHtml}
+                        </div>
+                    </div>
+                    ${data.requires_approval ? `
+                    <div class="mt-4 pt-4 border-t border-slate-200 flex justify-end gap-3 shrink-0">
+                        <button onclick="rejectAgentList(this)" class="px-5 py-2 rounded-xl bg-slate-100 border border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-600 hover:bg-slate-200 transition-all">Reject</button>
+                        <button onclick="approveAgentList(this)" class="px-5 py-2 rounded-xl bg-slate-900 text-white text-[10px] font-black uppercase tracking-wider hover:bg-slate-850 transition-all">Approve Agents</button>
+                    </div>` : ''}
+                `;
+                stream.appendChild(responseDiv);
+                scrollToBottom();
+            } catch(e) {
+                const indicator = document.getElementById('typingIndicator');
+                if (indicator) indicator.remove();
+
+                const errDiv = document.createElement('div');
+                errDiv.className = "flex gap-4 p-4 rounded-xl bg-rose-50 border border-rose-200 max-w-[85%]";
+                errDiv.innerHTML = `<div class="text-xs text-rose-600">Failed to connect to BA Agent. Make sure server is running.</div>`;
+                stream.appendChild(errDiv);
+                scrollToBottom();
+            }
+        }
+
+        function submitChatChoice(choiceText) {
+            document.getElementById('workspacePromptInput').value = choiceText;
+            sendWorkspacePrompt();
+        }
+
+        async function approveAgentList(btn) {
+            const container = btn.parentElement;
+            if (container) container.remove();
+
+            const stream = document.getElementById('chatStreamLog');
+
+            // Get selected agents
+            const agentsToRun = [];
+            const activeAgentNames = [];
+            if (document.getElementById('cb_po')?.checked) {
+                agentsToRun.push({ name: 'Product Owner', icon: 'assignment_ind', color: 'indigo-600' });
+                activeAgentNames.push('Product Owner');
+            }
+            if (document.getElementById('cb_ux')?.checked) {
+                agentsToRun.push({ name: 'UI/UX Designer', icon: 'palette', color: 'pink-600' });
+                activeAgentNames.push('UI/UX Designer');
+            }
+            if (document.getElementById('cb_arch')?.checked) {
+                agentsToRun.push({ name: 'Systems Architect', icon: 'hub', color: 'blue-600' });
+                activeAgentNames.push('Systems Architect');
+            }
+            if (document.getElementById('cb_dev')?.checked) {
+                agentsToRun.push({ name: 'Lead Developer', icon: 'code', color: 'teal-600' });
+                activeAgentNames.push('Lead Developer');
+            }
+            if (document.getElementById('cb_qa')?.checked) {
+                agentsToRun.push({ name: 'QA Engineer', icon: 'shield', color: 'amber-600' });
+                activeAgentNames.push('QA Engineer');
+            }
+
+            // Update the right panel list of agents to active status
+            updateRightPanel(activeAgentNames);
+            window.activeAgentsToRun = agentsToRun;
+            persistProjectState();
+
+            // Ask the user about the list of docs required
+            const selectDocsDiv = document.createElement('div');
+            selectDocsDiv.className = "flex gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200 max-w-[85%] animate-fadeIn flex-col";
+            selectDocsDiv.innerHTML = `
+                <div class="flex gap-4">
+                    <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center shrink-0 border border-slate-350">
+                        <span class="material-symbols-outlined text-slate-800 text-base">psychology</span>
+                    </div>
+                    <div class="space-y-1 flex-1">
+                        <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Business Analyst</div>
+                        <div class="text-xs text-slate-800 leading-relaxed font-sans font-medium">
+                            Great! The team is assembled. Please select which BABOK-aligned documents and artifacts you would like us to prepare. You can refer to the <a href="https://github.com/Prady089/BABOK_BA_Techniques_Handbook" target="_blank" class="text-blue-600 underline font-semibold">BABOK BA Techniques Handbook</a> for reference.
+                        </div>
+                        
+                        <div class="mt-4 pt-4 border-t border-slate-200 space-y-2">
+                            <span class="text-[10px] font-bold text-slate-450 uppercase tracking-widest">Target Artifacts List</span>
+                            <div class="grid grid-cols-1 gap-2">
+                                <label class="flex items-center gap-2 p-2 rounded bg-white border border-slate-200 cursor-pointer text-xs text-slate-700">
+                                    <input type="checkbox" checked id="doc_brd" class="rounded border-slate-300 text-slate-900 bg-slate-50"> Business Requirements Document (BRD)
+                                </label>
+                                <label class="flex items-center gap-2 p-2 rounded bg-white border border-slate-200 cursor-pointer text-xs text-slate-700">
+                                    <input type="checkbox" checked id="doc_frs" class="rounded border-slate-300 text-slate-900 bg-slate-50"> Functional Requirements Specification (FRS)
+                                </label>
+                                <label class="flex items-center gap-2 p-2 rounded bg-white border border-slate-200 cursor-pointer text-xs text-slate-700">
+                                    <input type="checkbox" checked id="doc_uc" class="rounded border-slate-300 text-slate-900 bg-slate-50"> Use Case Specification
+                                </label>
+                                <label class="flex items-center gap-2 p-2 rounded bg-white border border-slate-200 cursor-pointer text-xs text-slate-700">
+                                    <input type="checkbox" checked id="doc_flow" class="rounded border-slate-300 text-slate-900 bg-slate-50"> Process Flow Diagram (Miro-designed)
+                                </label>
+                                <label class="flex items-center gap-2 p-2 rounded bg-white border border-slate-200 cursor-pointer text-xs text-slate-700">
+                                    <input type="checkbox" checked id="doc_story" class="rounded border-slate-300 text-slate-900 bg-slate-50"> User Story Map & Sprint Backlog
+                                </label>
+                                <label class="flex items-center gap-2 p-2 rounded bg-white border border-slate-200 cursor-pointer text-xs text-slate-700">
+                                    <input type="checkbox" checked id="doc_arch" class="rounded border-slate-300 text-slate-900 bg-slate-50"> System Architecture Specification (Miro-designed)
+                                </label>
+                                <label class="flex items-center gap-2 p-2 rounded bg-white border border-slate-200 cursor-pointer text-xs text-slate-700">
+                                    <input type="checkbox" checked id="doc_test" class="rounded border-slate-300 text-slate-900 bg-slate-50"> Validation Test Scripts (UAT)
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="mt-4 pt-4 border-t border-slate-200 flex justify-end gap-3 shrink-0">
+                            <button onclick="startAgentDiscussion(this)" class="px-5 py-2 rounded-xl bg-slate-900 text-white text-[10px] font-black uppercase tracking-wider hover:bg-slate-850 transition-all">Confirm & Start Discussion</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            stream.appendChild(selectDocsDiv);
+            scrollToBottom();
+        }
+
+        async function startAgentDiscussion(btn) {
+            // Find parent message bubble container and remove its buttons div
+            const selectDocsCard = btn.closest('.animate-fadeIn');
+            const buttonContainer = btn.parentElement;
+            if (buttonContainer) buttonContainer.remove();
+
+            const stream = document.getElementById('chatStreamLog');
+
+            // Gather selected documents
+            const selectedDocs = [];
+            if (document.getElementById('doc_brd')?.checked) selectedDocs.push('Business Requirements Document (BRD)');
+            if (document.getElementById('doc_frs')?.checked) selectedDocs.push('Functional Requirements Specification (FRS)');
+            if (document.getElementById('doc_uc')?.checked) selectedDocs.push('Use Case Specification');
+            if (document.getElementById('doc_flow')?.checked) selectedDocs.push('Process Flow Diagram (Miro-designed)');
+            if (document.getElementById('doc_story')?.checked) selectedDocs.push('User Story Map & Sprint Backlog');
+            if (document.getElementById('doc_arch')?.checked) selectedDocs.push('System Architecture Specification (Miro-designed)');
+            if (document.getElementById('doc_test')?.checked) selectedDocs.push('Validation Test Scripts (UAT)');
+
+            window.selectedDocs = selectedDocs;
+            window.agentContributions = [];
+
+            // Sequentially trigger turn-by-turn agent alignment chat bubbles
+            const agentsToRun = window.activeAgentsToRun || [];
+            for (const agent of agentsToRun) {
+                // Show typing indicator
+                const typing = document.createElement('div');
+                typing.className = "flex gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200 max-w-[85%] animate-pulse";
+                typing.innerHTML = `
+                    <div class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center shrink-0 border border-slate-200">
+                        <span class="material-symbols-outlined text-slate-500 text-base">${agent.icon}</span>
+                    </div>
+                    <div class="space-y-1">
+                        <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">${agent.name}</div>
+                        <div class="text-xs text-slate-400 italic">Formulating perspective...</div>
+                    </div>
+                `;
+                stream.appendChild(typing);
+                scrollToBottom();
+
+                try {
+                    const response = await fetch('/chat/simulate_agents', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            history: chatHistory, 
+                            agent_name: agent.name, 
+                            knowledge: (activeProject && activeProject.knowledgeItems) || [],
+                            artifacts: selectedDocs
+                        })
+                    });
+                    const data = await response.json();
+                    typing.remove();
+
+                    window.agentContributions.push({ agent: agent.name, text: data.transcript });
+                    persistProjectState();
+
+                    const bubble = document.createElement('div');
+                    bubble.className = "flex gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200 max-w-[85%] animate-fadeIn";
+                    bubble.innerHTML = `
+                        <div class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center shrink-0 border border-slate-200">
+                            <span class="material-symbols-outlined text-${agent.color} text-base">${agent.icon}</span>
+                        </div>
+                        <div class="space-y-1">
+                            <div class="text-[10px] font-bold text-${agent.color} uppercase tracking-widest">${agent.name}</div>
+                            <div class="text-xs text-slate-700 leading-relaxed font-sans">${data.transcript.replace(/\n/g, '<br>')}</div>
+                        </div>
+                    `;
+                    stream.appendChild(bubble);
+                    scrollToBottom();
+
+                    // Small delay to make it feel natural
+                    await new Promise(r => setTimeout(r, 1250));
+
+                } catch (e) {
+                    typing.remove();
+                }
+            }
+
+            // BA final collated checklist summary turn
+            const finalCollator = document.createElement('div');
+            finalCollator.className = "flex gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200 max-w-[85%] animate-fadeIn";
+            finalCollator.innerHTML = `
+                <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center shrink-0 border border-slate-300">
+                    <span class="material-symbols-outlined text-slate-850 text-base">psychology</span>
+                </div>
+                <div class="space-y-1 flex-1">
+                    <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Business Analyst</div>
+                    <div class="text-xs text-slate-700 leading-relaxed font-sans">
+                        Thanks everyone. The team has aligned on the requirements and objectives for the selected documents. Ready to generate the specifications and build the Miro diagram.
+                    </div>
+                    <div class="mt-4 pt-4 border-t border-slate-200 flex justify-end gap-3 shrink-0">
+                        <button onclick="generateSelectedArtifacts(this)" class="px-5 py-2 rounded-xl bg-slate-900 text-white text-[10px] font-black uppercase tracking-wider hover:bg-slate-850 transition-all">Generate & Save Documents</button>
+                    </div>
+                </div>
+            `;
+            stream.appendChild(finalCollator);
+            scrollToBottom();
+        }
+
+        async function generateSelectedArtifacts(btn) {
+            const container = btn.parentElement;
+            if (container) container.remove();
+
+            const stream = document.getElementById('chatStreamLog');
+            
+            const typingDiv = document.createElement('div');
+            typingDiv.id = 'genIndicator';
+            typingDiv.className = "flex gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200 max-w-[85%] animate-pulse";
+            typingDiv.innerHTML = `
+                <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center shrink-0 border border-slate-300">
+                    <span class="material-symbols-outlined text-slate-650 text-base">cloud_download</span>
+                </div>
+                <div class="space-y-1">
+                    <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Vault Builder</div>
+                    <div class="text-xs text-slate-400 italic">Writing requirements documents to project Vault...</div>
+                </div>
+            `;
+            stream.appendChild(typingDiv);
+            scrollToBottom();
+
+            try {
+                const response = await fetch('/chat/generate_artifacts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        history: chatHistory,
+                        knowledge: (activeProject && activeProject.knowledgeItems) || [],
+                        artifacts: window.selectedDocs,
+                        agent_contributions: window.agentContributions || []
+                    })
+                });
+                const data = await response.json();
+
+                const indicator = document.getElementById('genIndicator');
+                if (indicator) indicator.remove();
+
+                if (data.success) {
+                    window.vaultFiles = data.files;
+                    window.testScripts = data.test_scripts;
+                    window.recommendedStories = data.recommended_stories;
+                    persistProjectState();
+
+                    // Automatically switch the active workspace view to the "Artifacts" tab
+                    switchWorkspaceTab(null, 'vault');
+                }
+            } catch(e) {
+                const indicator = document.getElementById('genIndicator');
+                if (indicator) indicator.remove();
+            }
+        }
+
+        function rejectAgentList(btn) {
+            const container = btn.parentElement;
+            if (container) container.remove();
+        }
+
+        async function syncSelectedJiraStories(btn) {
+            btn.disabled = true;
+            btn.innerHTML = 'Syncing... <span class="material-symbols-outlined animate-spin text-xs">sync</span>';
+
+            const selected = [];
+            document.querySelectorAll('#nonChatInterfaceContainer input[type="checkbox"]').forEach(cb => {
+                if (cb.checked) {
+                    const idx = parseInt(cb.getAttribute('data-idx'));
+                    if (window.recommendedStories && window.recommendedStories[idx]) {
+                        selected.push(window.recommendedStories[idx]);
+                    }
+                }
+            });
+
+            if (selected.length === 0) {
+                alert("Please select at least one story to sync.");
+                btn.disabled = false;
+                btn.innerHTML = 'Approve & Sync to Jira <span class="material-symbols-outlined text-xs">sync</span>';
+                return;
+            }
+
+            try {
+                const response = await fetch('/jira/create_bulk', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ issues: selected })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    btn.className = "px-5 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-bold uppercase tracking-wider";
+                    btn.innerHTML = 'Synced Successfully! <span class="material-symbols-outlined text-xs">check</span>';
+                    
+                    setTimeout(loadWorkspaceJira, 1000);
+                } else {
+                    alert("Jira bulk sync failed: " + (data.error || "Unknown error"));
+                    btn.disabled = false;
+                    btn.innerHTML = 'Approve & Sync to Jira <span class="material-symbols-outlined text-xs">sync</span>';
+                }
+            } catch(e) {
+                alert("Network error: " + e.message);
+                btn.disabled = false;
+                btn.innerHTML = 'Approve & Sync to Jira <span class="material-symbols-outlined text-xs">sync</span>';
+            }
+        }
+
+        async function loadWorkspaceJira() {
+            const list = document.getElementById('workspaceJiraList');
+            list.innerHTML = `<div class="text-center text-[10px] text-slate-500 py-8">Fetching board...</div>`;
+            try {
+                const r = await fetch('/jira/issues?max_results=20');
+                const d = await r.json();
+
+                if (d.error) {
+                    list.innerHTML = `<div class="text-center text-[10px] text-rose-500 py-8">Error: ${d.error}</div>`;
+                    return;
+                }
+
+                if (!d.issues || d.issues.length === 0) {
+                    list.innerHTML = `<div class="text-center text-[10px] text-slate-600 py-8">No issues found on Jira Board.</div>`;
+                    return;
+                }
+
+                list.innerHTML = d.issues.map(iss => {
+                    let badgeClass = "bg-slate-100 text-slate-500 border border-slate-200";
+                    if (iss.priority.toLowerCase() === 'high' || iss.priority.toLowerCase() === 'highest') {
+                        badgeClass = "bg-rose-50 text-rose-600 border border-rose-200";
+                    } else if (iss.priority.toLowerCase() === 'medium') {
+                        badgeClass = "bg-amber-50 text-amber-600 border border-amber-200";
+                    }
+
+                    return `
+                        <div onclick="window.open('${iss.url}','_blank')" class="p-3 rounded-lg bg-slate-50 border border-slate-200 hover:bg-slate-100 hover:border-slate-300 transition-all cursor-pointer space-y-2">
+                            <div class="flex items-center justify-between">
+                                <span class="text-[8px] font-mono font-bold text-blue-600">${iss.key}</span>
+                                <span class="text-[8px] font-bold uppercase tracking-wider text-slate-500">${iss.status}</span>
+                            </div>
+                            <h5 class="text-xs font-semibold text-slate-800 line-clamp-2">${iss.summary}</h5>
+                            <div class="flex items-center justify-between text-[9px] text-slate-500">
+                                <span class="px-2 py-0.5 rounded text-[8px] font-bold ${badgeClass}">${iss.priority}</span>
+                                <span>${iss.issueType}</span>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch(e) {
+                list.innerHTML = `<div class="text-center text-[10px] text-rose-500 py-8">Network error fetching board.</div>`;
+            }
+        }
+
+        async function fetchJiraStatus() {
+            const el = document.getElementById('jiraStatus');
+            try {
+                const r = await fetch('/jira/status');
+                const d = await r.json();
+                if (d.connected) {
+                    el.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><span class="text-slate-500 font-medium">Jira Connected (${d.project})</span>`;
+                } else {
+                    el.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-rose-400"></span><span class="text-slate-400 font-medium">Jira Offline</span>`;
+                }
+            } catch(e) {
+                el.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-rose-400"></span><span class="text-slate-400 font-medium">Jira Link Error</span>`;
+            }
+        }
+
+        // Confluence Publish Handler
+        async function publishToConfluence(btn) {
+            btn.disabled = true;
+            btn.innerHTML = 'Publishing... <span class="material-symbols-outlined animate-spin text-xs">sync</span>';
+            try {
+                const response = await fetch('/confluence/publish', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: (activeProject ? activeProject.name : "Banking Deposit page") + " BRD" })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    btn.className = "px-4 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold uppercase tracking-wider";
+                    btn.innerHTML = 'Published to Confluence! <span class="material-symbols-outlined text-xs">check</span>';
+                    
+                    const statusDiv = document.getElementById('confluencePublishStatus') || document.createElement('div');
+                    statusDiv.id = 'confluencePublishStatus';
+                    statusDiv.className = "mt-3 text-xs text-slate-600";
+                    statusDiv.innerHTML = `Successfully published! <a href="${data.url}" target="_blank" class="text-blue-600 underline font-bold">Open Confluence Page</a>`;
+                    btn.parentNode.parentNode.appendChild(statusDiv);
+                } else {
+                    alert("Confluence publishing failed: " + (data.error || "Space key KAN page creation mismatch"));
+                    btn.disabled = false;
+                    btn.innerHTML = 'Publish to Confluence <span class="material-symbols-outlined text-xs">description</span>';
+                }
+            } catch(e) {
+                alert("Network error: " + e.message);
+                btn.disabled = false;
+                btn.innerHTML = 'Publish to Confluence <span class="material-symbols-outlined text-xs">description</span>';
+            }
+        }
+
+        // Miro Board Sync Handler
+        async function syncToMiroBoard(btn) {
+            btn.disabled = true;
+            btn.innerHTML = 'Syncing Board... <span class="material-symbols-outlined animate-spin text-xs">sync</span>';
+            try {
+                const response = await fetch('/miro/sync_board', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        name: (activeProject ? activeProject.name : "Banking Deposit page") + " Stories Mapping",
+                        stories: window.recommendedStories || []
+                    })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    btn.className = "px-4 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold uppercase tracking-wider";
+                    btn.innerHTML = 'Synced to Miro! <span class="material-symbols-outlined text-xs">check</span>';
+                    
+                    const statusDiv = document.getElementById('miroSyncStatus') || document.createElement('div');
+                    statusDiv.id = 'miroSyncStatus';
+                    statusDiv.className = "mt-3 text-xs text-slate-600";
+                    statusDiv.innerHTML = `Successfully synced! <a href="${data.url}" target="_blank" class="text-blue-600 underline font-bold">Open Miro Board</a>`;
+                    btn.parentNode.parentNode.appendChild(statusDiv);
+                } else {
+                    alert("Miro sync failed: " + (data.error || "Unknown error"));
+                    btn.disabled = false;
+                    btn.innerHTML = 'Sync to Miro Board <span class="material-symbols-outlined text-xs">dashboard</span>';
+                }
+            } catch(e) {
+                alert("Network error: " + e.message);
+                btn.disabled = false;
+                btn.innerHTML = 'Sync to Miro Board <span class="material-symbols-outlined text-xs">dashboard</span>';
+            }
+        }
+
+        function renderMarkdown(md) {
+            const escape = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const lines = (md || '').split('\n');
+            let html = '';
+            let inList = false;
+            for (const rawLine of lines) {
+                const line = escape(rawLine);
+                const closeList = () => { if (inList) { html += '</ul>'; inList = false; } };
+
+                if (/^###\s+/.test(line)) {
+                    closeList();
+                    html += `<h4 class="text-sm font-bold text-slate-800 mt-4 mb-1">${line.replace(/^###\s+/, '')}</h4>`;
+                } else if (/^##\s+/.test(line)) {
+                    closeList();
+                    html += `<h3 class="text-base font-bold text-slate-900 mt-5 mb-2">${line.replace(/^##\s+/, '')}</h3>`;
+                } else if (/^#\s+/.test(line)) {
+                    closeList();
+                    html += `<h2 class="text-lg font-black text-slate-900 mt-6 mb-2">${line.replace(/^#\s+/, '')}</h2>`;
+                } else if (/^[\*\-]\s+/.test(line)) {
+                    if (!inList) { html += '<ul class="list-disc ml-5 space-y-1 my-2">'; inList = true; }
+                    html += `<li class="text-slate-700">${line.replace(/^[\*\-]\s+/, '')}</li>`;
+                } else if (line.trim() === '') {
+                    closeList();
+                } else {
+                    closeList();
+                    html += `<p class="text-slate-700 my-2">${line}</p>`;
+                }
+            }
+            if (inList) html += '</ul>';
+            return html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        }
+
+        function viewArtifact(idx) {
+            const f = (window.vaultFiles || [])[idx];
+            if (!f) return;
+            document.getElementById('artifactViewTitle').textContent = f.name;
+            document.getElementById('artifactViewDownload').href = f.url;
+            document.getElementById('artifactViewBody').innerHTML = renderMarkdown(f.content);
+            toggleArtifactModal(true);
+        }
+
+        function toggleArtifactModal(show) {
+            document.getElementById('artifactViewModal').classList.toggle('open', show);
+        }
+
+        // Recover a lost artifact manifest by scanning the workspace folder on disk
+        async function recoverArtifactsFromWorkspace(btn) {
+            btn.disabled = true;
+            btn.innerHTML = 'Recovering... <span class="material-symbols-outlined animate-spin text-xs">sync</span>';
+            try {
+                const response = await fetch('/artifacts/recover');
+                const data = await response.json();
+                if (data.success && data.files.length > 0) {
+                    window.vaultFiles = data.files;
+                    persistProjectState();
+                    switchWorkspaceTab(null, 'vault');
+                } else {
+                    alert("No files found in the workspace folder to recover.");
+                    btn.disabled = false;
+                    btn.innerHTML = 'Recover from Workspace Folder <span class="material-symbols-outlined text-xs">restore</span>';
+                }
+            } catch (e) {
+                alert("Network error: " + e.message);
+                btn.disabled = false;
+                btn.innerHTML = 'Recover from Workspace Folder <span class="material-symbols-outlined text-xs">restore</span>';
+            }
+        }
+
+        // Drag-and-drop artifact -> Confluence sync
+        window.confluenceSynced = window.confluenceSynced || [];
+
+        function handleArtifactDragStart(e, idx) {
+            e.dataTransfer.setData('text/plain', String(idx));
+            e.dataTransfer.effectAllowed = 'copy';
+        }
+
+        function handleConfluenceDragOver(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            e.currentTarget.classList.add('bg-indigo-100', 'border-indigo-400');
+        }
+
+        function handleConfluenceDragLeave(e) {
+            e.currentTarget.classList.remove('bg-indigo-100', 'border-indigo-400');
+        }
+
+        async function handleConfluenceDrop(e) {
+            e.preventDefault();
+            const zone = e.currentTarget;
+            zone.classList.remove('bg-indigo-100', 'border-indigo-400');
+
+            const idx = parseInt(e.dataTransfer.getData('text/plain'));
+            const f = (window.vaultFiles || [])[idx];
+            if (!f || !f.content) return;
+
+            const originalZoneHtml = zone.innerHTML;
+            zone.innerHTML = `<span class="material-symbols-outlined text-indigo-400 text-2xl animate-spin">sync</span><p class="text-[10px] text-indigo-600 font-semibold">Publishing ${f.name}...</p>`;
+
+            try {
+                const projectName = activeProject ? activeProject.name : "Project";
+                const response = await fetch('/confluence/publish', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: `${projectName} - ${f.name.replace('.docx', '')}`,
+                        content: f.content
+                    })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    window.confluenceSynced.unshift({ name: f.name, url: data.url });
+                    persistProjectState();
+                    renderConfluenceSyncedList();
+                } else {
+                    alert("Confluence publish failed: " + (data.error || "Unknown error"));
+                }
+            } catch (err) {
+                alert("Network error: " + err.message);
+            } finally {
+                zone.innerHTML = originalZoneHtml;
+            }
+        }
+
+        function renderConfluenceSyncedList() {
+            const list = document.getElementById('confluenceSyncedList');
+            if (!list) return;
+            const items = window.confluenceSynced || [];
+            list.innerHTML = items.map(it => `
+                <a href="${it.url}" target="_blank" class="flex items-center gap-2 p-2.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 transition-all text-[11px] text-slate-700">
+                    <span class="material-symbols-outlined text-emerald-500 text-sm">check_circle</span>
+                    <span class="truncate flex-1">${it.name}</span>
+                    <span class="material-symbols-outlined text-slate-400 text-xs">open_in_new</span>
+                </a>
+            `).join('');
+        }
+
+        function addKnowledgeItem(btn) {
+            const title = document.getElementById('kbTitleInput')?.value.trim();
+            const content = document.getElementById('kbContentInput')?.value.trim();
+            if (!title || !content) {
+                alert("Please fill in both the title and context content.");
+                return;
+            }
+
+            if (!activeProject.knowledgeItems) {
+                activeProject.knowledgeItems = [];
+            }
+            activeProject.knowledgeItems.push({ title, content, type: "Manual Instruction" });
+
+            // Sync the activeProject changes back to the workspaces list and local storage
+            const idx = workspaces.findIndex(w => w.id === activeProject.id);
+            if (idx !== -1) {
+                workspaces[idx] = activeProject;
+                saveWorkspacesToStorage();
+            }
+            
+            // Re-render Knowledge Base tab
+            switchWorkspaceTab(null, 'knowledge-base');
+        }
+
+        // Initialize
+        renderProjects();
+        fetchJiraStatus();
+
+        document.getElementById('workspacePromptInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendWorkspacePrompt();
+        });
+    </script>
+</body>
+</html>
