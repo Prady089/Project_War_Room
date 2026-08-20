@@ -6,3 +6,6 @@ reportlab
 requests>=2.31.0
 fastapi
 uvicorn
+python-docx
+python-multipart
+pypdf

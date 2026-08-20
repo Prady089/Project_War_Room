@@ -1,5 +1,5 @@
-import os, re, time
-from fastapi import FastAPI, Request
+import os, re, time, shutil, stat, io
+from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import google.generativeai as genai
@@ -9,11 +9,14 @@ import requests
 from requests.auth import HTTPBasicAuth
 from docx import Document
 from docx.shared import Pt, Inches
+from pypdf import PdfReader
 from dotenv import load_dotenv
+import db
 
 load_dotenv()
 
 app = FastAPI()
+db.init_db()
 
 # ============================================================
 # CONFIGURATION
@@ -26,8 +29,129 @@ if not os.path.exists(WORKSPACE_DIR):
 # Mount Workspace for Live Preview
 app.mount("/workspace", StaticFiles(directory=WORKSPACE_DIR), name="workspace")
 
-# Gemini
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY", ""))
+def get_project_dir(project_id):
+    """
+    Each app-level project gets its own subfolder under WORKSPACE_DIR so
+    generating documents for one project can never overwrite another's.
+    Projects created before this isolation existed have their files sitting
+    directly in WORKSPACE_DIR root instead - callers fall back to that root
+    when a project's own subfolder has nothing in it yet.
+    """
+    safe_id = re.sub(r'[^A-Za-z0-9_-]', '_', str(project_id or "default"))[:100] or "default"
+    project_path = os.path.join(WORKSPACE_DIR, safe_id)
+    os.makedirs(project_path, exist_ok=True)
+    return project_path, safe_id
+
+# Gemini - accept either env var name; .env currently sets GEMINI_API_KEY
+# (the name Google's own docs use), GOOGLE_API_KEY kept as a fallback for
+# any older .env still using that name.
+genai.configure(api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", ""))
+
+# ============================================================
+# PROJECT PERSISTENCE API (SQLite)
+# ============================================================
+
+@app.post("/api/projects")
+async def api_create_project(request: Request):
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    key = (body.get("key") or "").strip().upper()
+    description = (body.get("description") or "").strip()
+    jira_project_key = (body.get("jira_project_key") or "").strip().upper()
+    confluence_space_key = (body.get("confluence_space_key") or "").strip().upper()
+    if not name or not key:
+        return JSONResponse({"error": "Project name and key are required"}, status_code=400)
+    project = db.create_project(name, key, description or "No description provided.", jira_project_key, confluence_space_key)
+    return JSONResponse({"success": True, "project": project})
+
+
+@app.get("/api/projects")
+async def api_list_projects():
+    return JSONResponse({"success": True, "projects": db.list_projects()})
+
+
+@app.get("/api/projects/{project_id}")
+async def api_get_project(project_id: str):
+    project = db.get_project(project_id)
+    if not project:
+        return JSONResponse({"error": "Project not found"}, status_code=404)
+    return JSONResponse({"success": True, "project": project})
+
+
+def _force_rmtree(path):
+    """
+    Removes a directory tree, clearing read-only attributes on the way if a
+    delete fails. On this machine the workspace folder lives inside a live
+    OneDrive sync root, which can mark just-written files read-only while it
+    syncs - shutil.rmtree's default behavior raises PermissionError on those
+    instead of clearing the attribute like Explorer/PowerShell do.
+    """
+    def _on_error(func, target_path, exc_info):
+        try:
+            os.chmod(target_path, stat.S_IWRITE)
+            func(target_path)
+        except Exception:
+            pass
+    shutil.rmtree(path, onerror=_on_error)
+
+
+@app.delete("/api/projects/{project_id}")
+async def api_delete_project(project_id: str):
+    db.delete_project(project_id)
+    project_dir, _ = get_project_dir(project_id)
+    if os.path.isdir(project_dir):
+        _force_rmtree(project_dir)
+    return JSONResponse({"success": True})
+
+
+@app.post("/api/projects/{project_id}/knowledge")
+async def api_add_knowledge_item(project_id: str, request: Request):
+    body = await request.json()
+    title = (body.get("title") or "").strip()
+    content = (body.get("content") or "").strip()
+    if not title or not content:
+        return JSONResponse({"error": "Title and content are required"}, status_code=400)
+    db.add_knowledge_item(project_id, title, content, body.get("type", "Manual Instruction"))
+    return JSONResponse({"success": True})
+
+
+KNOWLEDGE_UPLOAD_MAX_CHARS = 50000
+
+@app.post("/api/projects/{project_id}/knowledge/upload")
+async def api_upload_knowledge_file(project_id: str, file: UploadFile = File(...)):
+    """
+    Extracts text from an uploaded reference document (.txt/.md/.docx/.pdf)
+    and stores it as a knowledge item, same as a manually pasted note - it
+    gets included as context in every subsequent agent prompt for this project.
+    """
+    filename = file.filename or "Uploaded Document"
+    ext = os.path.splitext(filename)[1].lower()
+    raw = await file.read()
+
+    try:
+        if ext in (".txt", ".md"):
+            text = raw.decode("utf-8", errors="ignore")
+        elif ext == ".docx":
+            text = "\n".join(p.text for p in Document(io.BytesIO(raw)).paragraphs)
+        elif ext == ".pdf":
+            reader = PdfReader(io.BytesIO(raw))
+            text = "\n".join((page.extract_text() or "") for page in reader.pages)
+        else:
+            return JSONResponse({"success": False, "error": f"Unsupported file type '{ext}'. Supported: .txt, .md, .docx, .pdf"}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"success": False, "error": f"Failed to read file: {str(e)}"}, status_code=400)
+
+    text = text.strip()
+    if not text:
+        return JSONResponse({"success": False, "error": "No extractable text found in this file."}, status_code=400)
+
+    truncated = len(text) > KNOWLEDGE_UPLOAD_MAX_CHARS
+    if truncated:
+        text = text[:KNOWLEDGE_UPLOAD_MAX_CHARS] + "\n\n[...truncated...]"
+
+    title = os.path.splitext(filename)[0]
+    db.add_knowledge_item(project_id, title, text, "Uploaded Document")
+    return JSONResponse({"success": True, "item": {"title": title, "content": text, "type": "Uploaded Document"}, "truncated": truncated})
 
 # ============================================================
 # JIRA CONFIGURATION
@@ -60,6 +184,76 @@ def jira_configured():
         return True
     return bool(JIRA_USERNAME and JIRA_API_TOKEN)
 
+def resolve_project_keys(project_id):
+    """
+    Returns (jira_key, confluence_key) for a project. Falls back to the
+    global .env JIRA_PROJECT_KEY when the project didn't set its own. If a
+    project set its own Jira key but not a separate Confluence space key,
+    the Jira key is reused for Confluence too (matches the common Atlassian
+    convention of one key shared across both products on a site).
+    """
+    jira_key = JIRA_PROJECT_KEY
+    confluence_key = JIRA_PROJECT_KEY
+    if project_id:
+        proj = db.get_project_basic(project_id)
+        if proj:
+            if proj.get("jira_project_key"):
+                jira_key = proj["jira_project_key"]
+                confluence_key = proj["jira_project_key"]
+            if proj.get("confluence_space_key"):
+                confluence_key = proj["confluence_space_key"]
+    return jira_key, confluence_key
+
+
+def _sanitize_work_item_tree(nodes, parent_type=None):
+    """
+    Enforces this Jira site's real 3-level hierarchy on LLM-generated JSON
+    (verified via /rest/api/3/issuetype: Epic=1, Story=0, Task=0, Subtask=-1):
+    Epic at the top; Story and Task are peers, both valid children of an Epic
+    or standalone top-level items; Subtask is the only level below, valid
+    only under a Story or a Task. Nodes that don't fit their position are
+    dropped rather than silently producing a tree Jira would reject on push.
+    """
+    if not isinstance(nodes, list):
+        return []
+
+    if parent_type is None:
+        allowed = {"Epic", "Story", "Task"}
+    elif parent_type == "Epic":
+        allowed = {"Story", "Task"}
+    elif parent_type in ("Story", "Task"):
+        allowed = {"Subtask"}
+    else:
+        allowed = set()  # Subtask can't have children
+
+    cleaned = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        issuetype = node.get("issuetype")
+        if issuetype not in allowed:
+            continue
+        summary = (node.get("summary") or "").strip()
+        if not summary:
+            continue
+        cleaned.append({
+            "issuetype": issuetype,
+            "summary": summary,
+            "description": node.get("description") or "",
+            "priority": node.get("priority") or "Medium",
+            "children": _sanitize_work_item_tree(node.get("children"), issuetype),
+        })
+    return cleaned
+
+def get_confluence_space_id(space_key, headers, auth):
+    """Resolves a Confluence space key to the numeric space ID the v2 API requires."""
+    get_kwargs = {"headers": headers, "params": {"keys": space_key}, "verify": JIRA_SSL_VERIFY, "timeout": 15}
+    if auth:
+        get_kwargs["auth"] = auth
+    space_r = requests.get(f"{JIRA_URL}/wiki/api/v2/spaces", **get_kwargs)
+    space_results = space_r.json().get("results", []) if space_r.status_code == 200 else []
+    return space_results[0]["id"] if space_results else None
+
 
 # ============================================================
 # LLM & DOCX UTILITY
@@ -67,7 +261,7 @@ def jira_configured():
 
 def llm(system, user):
     try:
-        model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        model_name = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
         model = genai.GenerativeModel(
             model_name=model_name,
             system_instruction=system + "\n\nImportant: Do not recite copyrighted material or training data verbatim. Be creative and synthesize new logic based on requirements."
@@ -127,89 +321,450 @@ def save_as_docx(title, content, file_path):
     doc.save(file_path)
 
 
-def create_miro_flowchart(miro_token, board_name, steps):
+MIRO_FALLBACK_BOARD_URL = "https://miro.com/app/board/uXjVPkMck5Q=/"
+
+
+def _miro_headers(miro_token):
+    return {
+        "Authorization": f"Bearer {miro_token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
+
+
+def _miro_create_board(headers, name, description):
+    r = requests.post("https://api.miro.com/v2/boards", headers=headers,
+                       json={"name": name, "description": description}, timeout=10)
+    if r.status_code not in (200, 201):
+        return None, None
+    data = r.json()
+    return data.get("id"), data.get("viewLink")
+
+
+def _miro_create_text(headers, board_id, html, x, y, width, font_size="32", color="#e2e8f0", align="center"):
+    requests.post(f"https://api.miro.com/v2/boards/{board_id}/texts", headers=headers, json={
+        "data": {"content": html},
+        "style": {"fontSize": font_size, "color": color, "textAlign": align},
+        "position": {"x": x, "y": y},
+        "geometry": {"width": width}
+    }, timeout=8)
+
+
+def _miro_create_frame(headers, board_id, title, fill_color, x, y, width, height):
+    r = requests.post(f"https://api.miro.com/v2/boards/{board_id}/frames", headers=headers, json={
+        "data": {"title": title, "format": "custom", "type": "freeform"},
+        "style": {"fillColor": fill_color},
+        "position": {"x": x, "y": y},
+        "geometry": {"width": width, "height": height}
+    }, timeout=8)
+    return r.json().get("id") if r.status_code in (200, 201) else None
+
+
+def _miro_create_shape(headers, board_id, shape, content, fill, border, text_color,
+                        x, y, width, height, parent_id=None, fallback_x=None, fallback_y=None):
+    payload = {
+        "data": {"content": content, "shape": shape},
+        "style": {"fillColor": fill, "borderColor": border, "color": text_color, "fontSize": "12"},
+        "position": {"x": x, "y": y},
+        "geometry": {"width": width, "height": height}
+    }
+    if parent_id:
+        payload["parent"] = {"id": parent_id}
+    r = requests.post(f"https://api.miro.com/v2/boards/{board_id}/shapes", headers=headers, json=payload, timeout=8)
+    if r.status_code not in (200, 201) and parent_id and fallback_x is not None:
+        # Nested placement can be rejected if it lands outside the frame's local
+        # bounds - retry once as an absolute (unparented) canvas position instead.
+        payload.pop("parent", None)
+        payload["position"] = {"x": fallback_x, "y": fallback_y}
+        r = requests.post(f"https://api.miro.com/v2/boards/{board_id}/shapes", headers=headers, json=payload, timeout=8)
+    return r.json().get("id") if r.status_code in (200, 201) else None
+
+
+def _miro_create_connector(headers, board_id, start_id, end_id, color, label=None):
+    payload = {
+        "startItem": {"id": start_id},
+        "endItem": {"id": end_id},
+        "shape": "curved",
+        "style": {"strokeColor": color, "strokeWidth": "2", "startStrokeCap": "none", "endStrokeCap": "stealth"}
+    }
+    if label:
+        payload["captions"] = [{"content": label, "position": "50%"}]
+    requests.post(f"https://api.miro.com/v2/boards/{board_id}/connectors", headers=headers, json=payload, timeout=8)
+
+
+LANE_ACCENTS = ["#10b981", "#3b82f6", "#a855f7", "#f59e0b", "#ec4899"]
+LANE_FILLS = ["#0b2b22", "#0b1f33", "#1f1533", "#332708", "#330d20"]
+
+COL_SPACING = 340
+LEFT_MARGIN = 170
+ROW_HEIGHT = 160
+LANE_PAD = 40
+LANE_GAP = 60
+
+
+def _compute_flow_columns(steps):
+    """Longest-path-from-root column assignment so branches/merges never overlap."""
+    by_id = {s["id"]: s for s in steps}
+    edges = []
+    for s in steps:
+        sid = s["id"]
+        if s.get("type") == "decision":
+            if s.get("yes_next") in by_id:
+                edges.append((sid, s["yes_next"], "yes", s.get("yes_label") or "Yes"))
+            if s.get("no_next") in by_id:
+                edges.append((sid, s["no_next"], "no", s.get("no_label") or "No"))
+        elif s.get("next") in by_id:
+            edges.append((sid, s["next"], "default", None))
+
+    indegree = {sid: 0 for sid in by_id}
+    children = {sid: [] for sid in by_id}
+    for f, t, _, _ in edges:
+        children[f].append(t)
+        indegree[t] += 1
+
+    columns = {sid: 0 for sid in by_id if indegree[sid] == 0}
+    frontier = list(columns.keys())
+    guard = 0
+    while frontier and guard < len(by_id) + 5:
+        guard += 1
+        nxt = []
+        for sid in frontier:
+            for c in children.get(sid, []):
+                new_col = columns[sid] + 1
+                if columns.get(c, -1) < new_col:
+                    columns[c] = new_col
+                    nxt.append(c)
+        frontier = nxt
+    for sid in by_id:
+        columns.setdefault(sid, 0)
+    return columns, edges
+
+
+def create_miro_process_flow(miro_token, board_name, data):
     """
-    Creates a new Miro board and maps the flowchart steps as visual connected rectangles.
+    Builds an enterprise-style swimlane process flow diagram: one lane frame per
+    actor/system, shape-coded steps (pill start/end, rectangle process, diamond
+    decision), colour-coded Yes/No branch connectors, a title, and a legend.
     """
     if not miro_token or "test_token" in miro_token or len(miro_token) < 20:
-        return "https://miro.com/app/board/uXjVPkMck5Q=/"
-        
+        return MIRO_FALLBACK_BOARD_URL
+    steps = data.get("steps") or []
+    if not steps:
+        return MIRO_FALLBACK_BOARD_URL
+
     try:
-        headers = {
-            "Authorization": f"Bearer {miro_token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json"
+        headers = _miro_headers(miro_token)
+        board_id, board_url = _miro_create_board(headers, board_name, "Enterprise process flow diagram generated by Nexus.AI")
+        if not board_id:
+            return MIRO_FALLBACK_BOARD_URL
+
+        lanes = list(data.get("lanes") or [])
+        if not lanes:
+            lanes = ["Process"]
+        lane_index = {name: i for i, name in enumerate(lanes)}
+        for s in steps:
+            lane = s.get("lane") or lanes[0]
+            s["lane"] = lane
+            if lane not in lane_index:
+                lane_index[lane] = len(lanes)
+                lanes.append(lane)
+
+        columns, edges = _compute_flow_columns(steps)
+
+        # A (lane, column) cell can hold more than one node - e.g. two
+        # different failure branches that both land back in the same lane one
+        # hop after a decision. Without a sub-row, those nodes would share the
+        # exact same coordinates and draw stacked exactly on top of each
+        # other, which is what made every earlier diagram look like a single
+        # flat row: only the last shape drawn per cell was ever visible.
+        cell_occupancy = {}
+        sub_row = {}
+        for s in steps:
+            cell = (s["lane"], columns[s["id"]])
+            row = cell_occupancy.get(cell, 0)
+            sub_row[s["id"]] = row
+            cell_occupancy[cell] = row + 1
+
+        lane_rows = {name: 1 for name in lanes}
+        for (lane, _col), count in cell_occupancy.items():
+            lane_rows[lane] = max(lane_rows[lane], count)
+        lane_heights = {name: lane_rows[name] * ROW_HEIGHT + LANE_PAD for name in lanes}
+
+        lane_y_offset = {}
+        cursor = 0
+        for name in lanes:
+            lane_y_offset[name] = cursor
+            cursor += lane_heights[name] + LANE_GAP
+        total_lanes_height = cursor - LANE_GAP
+
+        max_col = max(columns.values()) if columns else 0
+        frame_width = (max_col + 1) * COL_SPACING + 200
+
+        _miro_create_text(headers, board_id, f"<p><strong>{board_name}</strong></p>",
+                           frame_width / 2, -220, frame_width, font_size="40")
+
+        frame_ids = {}
+        for name in lanes:
+            fy = lane_y_offset[name] + lane_heights[name] / 2
+            frame_ids[name] = _miro_create_frame(
+                headers, board_id, f"\U0001F464 {name}", LANE_FILLS[lane_index[name] % len(LANE_FILLS)],
+                frame_width / 2, fy, frame_width, lane_heights[name]
+            )
+
+        # BPMN-flavoured shapes: small circles for start/end events, a rounded
+        # "task" box for process steps, a diamond for decisions/gateways.
+        NODE_STYLES = {
+            "start": ("circle", "#065f46", "#10b981", "#ffffff", 130, 130, True),
+            "end": ("circle", "#065f46", "#10b981", "#ffffff", 130, 130, True),
+            "end_success": ("circle", "#065f46", "#10b981", "#ffffff", 130, 130, True),
+            "end_failure": ("circle", "#7f1d1d", "#ef4444", "#ffffff", 130, 130, True),
+            "decision": ("rhombus", "#78350f", "#f59e0b", "#ffffff", 260, 160, False),
         }
-        
-        # 1. Create Board
-        board_payload = {
-            "name": board_name,
-            "description": "Interactive Process Flowchart generated by Nexus.AI"
-        }
-        r = requests.post("https://api.miro.com/v2/boards", headers=headers, json=board_payload, timeout=10)
-        if r.status_code not in (200, 201):
-            return "https://miro.com/app/board/uXjVPkMck5Q=/"
-            
-        board_data = r.json()
-        board_id = board_data.get("id")
-        board_url = board_data.get("viewLink")
-        
-        # 2. Create Shapes for each step and link them
-        created_shape_ids = []
-        x_coord = 0
-        
-        for idx, step in enumerate(steps):
-            title = step.get("title", f"Step {idx+1}")
-            desc = step.get("text", "")
-            
-            # Create Shape
-            shape_payload = {
-                "data": {
-                    "content": f"<h3>{title}</h3><p>{desc}</p>",
-                    "shape": "rectangle"
-                },
-                "style": {
-                    "fillColor": "#151f32",
-                    "borderColor": "#10b981",
-                    "color": "#e2e8f0"
-                },
-                "position": {
-                    "x": x_coord,
-                    "y": 0
-                },
-                "geometry": {
-                    "width": 240,
-                    "height": 130
-                }
-            }
-            
-            r_shape = requests.post(f"https://api.miro.com/v2/boards/{board_id}/shapes", headers=headers, json=shape_payload, timeout=5)
-            if r_shape.status_code in (200, 201):
-                shape_id = r_shape.json().get("id")
-                created_shape_ids.append(shape_id)
-                
-                # Connect to previous shape
-                if len(created_shape_ids) > 1:
-                    prev_id = created_shape_ids[-2]
-                    conn_payload = {
-                        "startItem": {
-                            "id": prev_id
-                        },
-                        "endItem": {
-                            "id": shape_id
-                        },
-                        "style": {
-                            "strokeColor": "#10b981",
-                            "strokeWidth": "2.0"
-                        }
-                    }
-                    requests.post(f"https://api.miro.com/v2/boards/{board_id}/connectors", headers=headers, json=conn_payload, timeout=5)
-            
-            x_coord += 350 # Spacing horizontally
-            
+
+        shape_ids = {}
+        for s in steps:
+            sid = s["id"]
+            lane = s["lane"]
+            col = columns.get(sid, 0)
+            row = sub_row[sid]
+            accent = LANE_ACCENTS[lane_index.get(lane, 0) % len(LANE_ACCENTS)]
+            shape, fill, border, txt_color, w, h, terse = NODE_STYLES.get(
+                s.get("type", "process"), ("round_rectangle", "#151f32", accent, "#e2e8f0", 240, 130, False)
+            )
+            title = s.get("title", f"Step {sid}")
+            text = s.get("text", "")
+            content = f"<p><strong>{title}</strong></p>" if terse else f"<p><strong>{title}</strong></p><p>{text}</p>"
+
+            local_x = LEFT_MARGIN + col * COL_SPACING
+            local_y = LANE_PAD + (row + 0.5) * ROW_HEIGHT
+            abs_x = col * COL_SPACING + LEFT_MARGIN
+            abs_y = lane_y_offset[lane] + local_y
+
+            shape_ids[sid] = _miro_create_shape(
+                headers, board_id, shape, content, fill, border, txt_color,
+                local_x, local_y, w, h, parent_id=frame_ids.get(lane),
+                fallback_x=abs_x, fallback_y=abs_y
+            )
+
+        for frm, to, kind, label in edges:
+            if shape_ids.get(frm) and shape_ids.get(to):
+                color = {"default": "#64748b", "yes": "#22c55e", "no": "#ef4444"}.get(kind, "#64748b")
+                _miro_create_connector(headers, board_id, shape_ids[frm], shape_ids[to], color, label)
+
+        legend_y = total_lanes_height + 60
+        _miro_create_text(headers, board_id, "<p><strong>Legend</strong></p>", 60, legend_y, 200,
+                           font_size="20", color="#94a3b8", align="left")
+        legend_items = [
+            ("circle", "#065f46", "#10b981", "Start / Success End"),
+            ("round_rectangle", "#151f32", "#3b82f6", "Process Step"),
+            ("rhombus", "#78350f", "#f59e0b", "Decision Point"),
+            ("circle", "#7f1d1d", "#ef4444", "Failure / Rejected End"),
+        ]
+        lx = 0
+        for shape, fill, border, label in legend_items:
+            _miro_create_shape(headers, board_id, shape, "", fill, border, "#ffffff", lx, legend_y + 80, 90, 50)
+            _miro_create_text(headers, board_id, f"<p>{label}</p>", lx, legend_y + 130, 220,
+                               font_size="14", color="#94a3b8", align="left")
+            lx += 260
+
         return board_url
     except Exception:
-        return "https://miro.com/app/board/uXjVPkMck5Q=/"
+        return MIRO_FALLBACK_BOARD_URL
+
+
+TIER_ACCENTS = ["#3b82f6", "#a855f7", "#0d9488", "#f59e0b", "#16a34a"]
+TIER_FILLS = ["#0b1f33", "#1f1533", "#062b28", "#332708", "#0b2b1c"]
+
+TIER_COMP_SPACING = 300
+TIER_LEFT_MARGIN = 150
+TIER_HEIGHT = 220
+TIER_GAP = 90
+
+
+def create_miro_architecture_diagram(miro_token, board_name, data):
+    """
+    Builds an enterprise-style layered system architecture diagram: one frame per
+    tier (Presentation/Gateway/Service/Data, etc.), colour-coded per tier, with
+    labelled connectors showing the protocol/data exchanged between components.
+    """
+    if not miro_token or "test_token" in miro_token or len(miro_token) < 20:
+        return MIRO_FALLBACK_BOARD_URL
+    tiers = data.get("tiers") or []
+    if not tiers:
+        return MIRO_FALLBACK_BOARD_URL
+
+    try:
+        headers = _miro_headers(miro_token)
+        board_id, board_url = _miro_create_board(headers, board_name, "Enterprise system architecture diagram generated by Nexus.AI")
+        if not board_id:
+            return MIRO_FALLBACK_BOARD_URL
+
+        max_components = max((len(t.get("components") or []) for t in tiers), default=1) or 1
+        frame_width = max_components * TIER_COMP_SPACING + 200
+
+        _miro_create_text(headers, board_id, f"<p><strong>{board_name}</strong></p>",
+                           frame_width / 2, -220, frame_width, font_size="40")
+
+        frame_ids = []
+        shape_ids = []
+        for t_idx, tier in enumerate(tiers):
+            accent = TIER_ACCENTS[t_idx % len(TIER_ACCENTS)]
+            fill = TIER_FILLS[t_idx % len(TIER_FILLS)]
+            fy = t_idx * (TIER_HEIGHT + TIER_GAP) + TIER_HEIGHT / 2
+            frame_id = _miro_create_frame(headers, board_id, f"\U0001F5C2 {tier.get('name', f'Tier {t_idx+1}')}",
+                                           fill, frame_width / 2, fy, frame_width, TIER_HEIGHT)
+            frame_ids.append(frame_id)
+
+            components = tier.get("components") or []
+            tier_shape_ids = []
+            for c_idx, comp in enumerate(components):
+                title = comp.get("title", f"Component {c_idx+1}")
+                text = comp.get("text", "")
+                content = f"<p><strong>⚙ {title}</strong></p><p>{text}</p>"
+                local_x = TIER_LEFT_MARGIN + c_idx * TIER_COMP_SPACING
+                local_y = TIER_HEIGHT / 2
+                abs_x = c_idx * TIER_COMP_SPACING + TIER_LEFT_MARGIN
+                abs_y = t_idx * (TIER_HEIGHT + TIER_GAP) + TIER_HEIGHT / 2
+                sid = _miro_create_shape(
+                    headers, board_id, "rectangle", content, "#151f32", accent, "#e2e8f0",
+                    local_x, local_y, 260, 130, parent_id=frame_id,
+                    fallback_x=abs_x, fallback_y=abs_y
+                )
+                tier_shape_ids.append(sid)
+            shape_ids.append(tier_shape_ids)
+
+        connections = data.get("connections") or []
+        valid_connections = []
+        for c in connections:
+            ft, fc, tt, tc = c.get("from_tier"), c.get("from_component"), c.get("to_tier"), c.get("to_component")
+            if (isinstance(ft, int) and isinstance(tt, int) and 0 <= ft < len(shape_ids) and 0 <= tt < len(shape_ids)
+                    and isinstance(fc, int) and isinstance(tc, int)
+                    and 0 <= fc < len(shape_ids[ft]) and 0 <= tc < len(shape_ids[tt])):
+                valid_connections.append(c)
+
+        if not valid_connections:
+            # Fall back to a straightforward tier-to-tier cascade so the diagram
+            # never renders as a disconnected pile of boxes.
+            for t_idx in range(len(tiers) - 1):
+                for c_idx in range(len(shape_ids[t_idx])):
+                    target = min(c_idx, len(shape_ids[t_idx + 1]) - 1) if shape_ids[t_idx + 1] else None
+                    if target is not None:
+                        valid_connections.append({"from_tier": t_idx, "from_component": c_idx,
+                                                    "to_tier": t_idx + 1, "to_component": target, "label": None})
+
+        for c in valid_connections:
+            start_id = shape_ids[c["from_tier"]][c["from_component"]]
+            end_id = shape_ids[c["to_tier"]][c["to_component"]]
+            if start_id and end_id:
+                accent = TIER_ACCENTS[c["from_tier"] % len(TIER_ACCENTS)]
+                _miro_create_connector(headers, board_id, start_id, end_id, accent, c.get("label"))
+
+        legend_y = len(tiers) * (TIER_HEIGHT + TIER_GAP) + 60
+        _miro_create_text(headers, board_id, "<p><strong>Legend</strong></p>", 60, legend_y, 200,
+                           font_size="20", color="#94a3b8", align="left")
+        lx = 0
+        for t_idx, tier in enumerate(tiers):
+            accent = TIER_ACCENTS[t_idx % len(TIER_ACCENTS)]
+            _miro_create_shape(headers, board_id, "rectangle", "", "#151f32", accent, "#ffffff", lx, legend_y + 80, 90, 50)
+            _miro_create_text(headers, board_id, f"<p>{tier.get('name', f'Tier {t_idx+1}')}</p>", lx, legend_y + 130, 220,
+                               font_size="14", color="#94a3b8", align="left")
+            lx += 260
+
+        return board_url
+    except Exception:
+        return MIRO_FALLBACK_BOARD_URL
+
+
+ARTIFACT_KEYWORDS = [
+    ("User Story Map & Sprint Backlog", ["jira", "user stor", "sprint", "backlog", "epic", "subtask", "task", "work item", "work breakdown"]),
+    ("Process Flow Diagram (Miro-designed)", ["process flow", "user journey", "flowchart", "flow diagram"]),
+    ("System Architecture Specification (Miro-designed)", ["architecture", "system design", "tech stack", "infrastructure", "system diagram"]),
+    ("Validation Test Scripts (UAT)", ["test script", "test case", "uat", "qa test", "validation test"]),
+    ("Business Requirements Document (BRD)", ["brd", "business requirement"]),
+    ("Functional Requirements Specification (FRS)", ["frs", "functional requirement"]),
+    ("Use Case Specification", ["use case"]),
+]
+ALL_ARTIFACTS = [name for name, _ in ARTIFACT_KEYWORDS]
+
+# The 3 contexts the app organizes work into: written documentation (synced to
+# Confluence), Jira user stories/tasks (drafted then pushed to Jira), and Miro
+# diagrams. Offered as quick-pick options when a request is too generic to
+# scope on its own (e.g. "create documentation for the requirement").
+CONTEXT_BUCKETS = {
+    "documentation": ["Business Requirements Document (BRD)", "Functional Requirements Specification (FRS)", "Use Case Specification", "Validation Test Scripts (UAT)"],
+    "jira": ["User Story Map & Sprint Backlog"],
+    "miro": ["Process Flow Diagram (Miro-designed)", "System Architecture Specification (Miro-designed)"],
+}
+CONTEXT_BUCKETS["all"] = ALL_ARTIFACTS
+
+
+def detect_target_artifacts(text):
+    """
+    Keyword-scoped artifact detection, so a targeted request ("rework the
+    Jira tasks alone") only regenerates what it names instead of the whole
+    document set. Deliberately not an LLM call - the chat path already has
+    known hang risk from the Gemini SDK call having no timeout, and this
+    doesn't need one: the artifact set is a small fixed list with distinctive
+    names.
+
+    Only scans the CURRENT message, never the accumulated chat history: an
+    earlier confirmation like "we'll prepare the Business Requirements
+    Document..." otherwise stays in history_str forever and would make every
+    later, unrelated message in the same conversation spuriously re-match BRD.
+
+    Returns [] (not a default) when nothing specific is named - the caller
+    is expected to ask the user to pick a context rather than silently
+    guessing the full document set.
+    """
+    lowered = text.lower()
+    return [name for name, keywords in ARTIFACT_KEYWORDS if any(kw in lowered for kw in keywords)]
+
+
+BABOK_INDEX_URL = "https://raw.githubusercontent.com/Prady089/BABOK_BA_Techniques_Handbook/main/BABOK%C2%AE%20Business%20Analysis%20Techniques%20%E2%80%93%20Master%20Index.md"
+_babok_index_cache = {"content": None}
+
+
+def get_babok_index():
+    """
+    Fetches and caches the BABOK v3 technique master index (~7KB table of
+    all 50 named techniques, grouped by category) so agents can ground
+    recommendations in real named techniques instead of generic advice.
+    Cached in-memory for the life of the process - it's a static reference
+    doc, not something that changes mid-session. A fetch failure (GitHub
+    unreachable, etc.) just means callers proceed without it rather than
+    blocking a chat response on external availability.
+    """
+    if _babok_index_cache["content"] is not None:
+        return _babok_index_cache["content"]
+    try:
+        r = requests.get(BABOK_INDEX_URL, timeout=8)
+        if r.status_code == 200:
+            _babok_index_cache["content"] = r.text
+            return r.text
+    except Exception:
+        pass
+    return ""
+
+
+def build_kb_context(knowledge_list):
+    """
+    Shared by /chat/ba, /chat/simulate_agents, and /chat/generate_artifacts:
+    folds the project's manually-added knowledge items and the BABOK
+    technique index into one context block for the LLM prompt.
+    """
+    context = ""
+    if knowledge_list:
+        context = "\nACTIVE KNOWLEDGE BASE REFERENCES:\n"
+        for k in knowledge_list:
+            context += f"- Title: {k.get('title')}\n  Context: {k.get('content')}\n"
+    babok_index = get_babok_index()
+    if babok_index:
+        context += (
+            "\nBABOK® v3 TECHNIQUE REFERENCE - the team's default methodology grounding. "
+            "Where relevant, cite specific named techniques from this index (e.g. \"per BABOK's "
+            f"Business Rules Analysis technique...\") rather than generic advice:\n{babok_index}\n"
+        )
+    return context
 
 
 # ============================================================
@@ -222,12 +777,9 @@ async def chat_ba(request: Request):
     user_message = body.get("message", "")
     history = body.get("history", [])
     knowledge_list = body.get("knowledge", [])
+    project_id = body.get("project_id")
 
-    kb_context = ""
-    if knowledge_list:
-        kb_context = "\nACTIVE KNOWLEDGE BASE REFERENCES:\n"
-        for k in knowledge_list:
-            kb_context += f"- Title: {k.get('title')}\n  Context: {k.get('content')}\n"
+    kb_context = build_kb_context(knowledge_list)
 
     history_str = ""
     user_turns_count = 0
@@ -238,18 +790,56 @@ async def chat_ba(request: Request):
             user_turns_count += 1
 
     if user_turns_count >= 1:
+        # No agent-selection or artifact-checklist gate: the full specialist
+        # team always runs by default, and the artifact set is inferred from
+        # what was actually asked for (e.g. "rework the Jira tasks" only
+        # regenerates the work item tree, not the entire document set) - see
+        # detect_target_artifacts. This keeps the chat task-oriented instead
+        # of forcing every request through the same multi-step wizard.
+        target_artifacts = detect_target_artifacts(user_message)
+
+        if not target_artifacts:
+            # Too generic to scope on its own (e.g. "create documentation for
+            # the requirement", or a fresh ask with no artifact named at all) -
+            # ask which of the 3 contexts instead of silently guessing the
+            # full document set. The frontend renders this as quick-pick
+            # buttons; the user can also just type exactly what they want.
+            response_text = (
+                "Sure — what should the team prepare: Documentation (BRD, FRS, Use Cases & Test Scripts), "
+                "Jira User Stories, Miro Diagrams, or all three? You can also just tell me exactly what you need."
+            )
+            if project_id:
+                try:
+                    db.add_chat_message(project_id, "user", user_message)
+                    db.add_chat_message(project_id, "agent", response_text)
+                except Exception:
+                    pass
+            return JSONResponse({
+                "response": response_text,
+                "requires_approval": False,
+                "stage": "clarify",
+                "context_buckets": CONTEXT_BUCKETS
+            })
+
+        scope_note = "the full requirements document set" if target_artifacts == ALL_ARTIFACTS else ", ".join(target_artifacts)
         system_prompt = f"""
-You are acting as an expert Business Analyst (BA) in a War Room interview.
-Based on the requirement, recommend exactly which sub-agents from our team are needed (e.g. Product Owner, UI/UX Designer, Systems Architect, Lead Developer, QA Engineer).
-Ask the user explicitly: "Please approve this list of agents to start the requirements alignment."
+You are acting as an expert Business Analyst (BA) in a War Room. The specialist team (Product Owner, UI/UX Designer, Systems Architect, Lead Developer, QA Engineer) will now automatically review this request and prepare: {scope_note}.
+Write a short 1-2 sentence confirmation of what will be produced, in a natural conversational tone. Do not ask the user to select or approve anything - just confirm the scope and that the team is getting to work now.
 {kb_context}
 """
-        prompt = f"Chat History:\n{history_str}\n\nUser New Input: {user_message}\n\nPlease recommend the final list of agents now."
+        prompt = f"Chat History:\n{history_str}\n\nUser New Input: {user_message}\n\nConfirm scope and that the team is starting now:"
         response_text = llm(system_prompt, prompt)
+        if project_id:
+            try:
+                db.add_chat_message(project_id, "user", user_message)
+                db.add_chat_message(project_id, "agent", response_text)
+            except Exception:
+                pass
         return JSONResponse({
             "response": response_text,
-            "requires_approval": True,
-            "stage": "agent_list"
+            "requires_approval": False,
+            "stage": "ready",
+            "target_artifacts": target_artifacts
         })
 
     system_prompt = f"""
@@ -261,6 +851,12 @@ Always include "Other (please specify below)" as the final option.
 """
     prompt = f"User requirement: {user_message}\n\nPlease ask 1-2 high-level baseline questions:"
     response_text = llm(system_prompt, prompt)
+    if project_id:
+        try:
+            db.add_chat_message(project_id, "user", user_message)
+            db.add_chat_message(project_id, "agent", response_text)
+        except Exception:
+            pass
     return JSONResponse({
         "response": response_text,
         "requires_approval": False,
@@ -279,12 +875,9 @@ async def simulate_agents(request: Request):
     agent_name = body.get("agent_name", "Architect")
     knowledge_list = body.get("knowledge", [])
     artifacts_list = body.get("artifacts", [])
-    
-    kb_context = ""
-    if knowledge_list:
-        kb_context = "\nACTIVE KNOWLEDGE BASE REFERENCES:\n"
-        for k in knowledge_list:
-            kb_context += f"- Title: {k.get('title')}\n  Context: {k.get('content')}\n"
+    project_id = body.get("project_id")
+
+    kb_context = build_kb_context(knowledge_list)
 
     req_summary = ""
     for h in requirements_history:
@@ -306,6 +899,11 @@ If any selected document is a 'Process Flow Diagram' or 'System Architecture Spe
 
     prompt = f"Requirements history:\n{req_summary}\n\nPlease share your perspective as the {agent_name}:"
     response_text = llm(system_prompt, prompt)
+    if project_id:
+        try:
+            db.add_agent_contribution(project_id, agent_name, response_text)
+        except Exception:
+            pass
     return JSONResponse({"transcript": response_text})
 
 
@@ -320,15 +918,20 @@ async def generate_artifacts(request: Request):
     knowledge_list = body.get("knowledge", [])
     artifacts_requested = body.get("artifacts", [])
     agent_contributions = body.get("agent_contributions", [])
+    project_dir, safe_project_id = get_project_dir(body.get("project_id"))
+    project_display_name = "Requirements"
+    if body.get("project_id"):
+        try:
+            proj_basic = db.get_project_basic(body.get("project_id"))
+            if proj_basic and proj_basic.get("name"):
+                project_display_name = proj_basic["name"]
+        except Exception:
+            pass
 
     if not artifacts_requested:
         artifacts_requested = ["Business Requirements Document (BRD)", "System Architecture Spec", "Validation Test Scripts (UAT)"]
 
-    kb_context = ""
-    if knowledge_list:
-        kb_context = "\nACTIVE KNOWLEDGE BASE REFERENCES:\n"
-        for k in knowledge_list:
-            kb_context += f"- Title: {k.get('title')}\n  Context: {k.get('content')}\n"
+    kb_context = build_kb_context(knowledge_list)
 
     team_context = ""
     if agent_contributions:
@@ -349,39 +952,39 @@ async def generate_artifacts(request: Request):
 
     files_list = []
     test_scripts_list = []
-    recommended_stories = []
+    work_item_tree = []
 
     # 1. Generate Business Requirements Document (BRD)
     if "Business Requirements Document (BRD)" in artifacts_requested:
         brd_sys = "You are a Business Analyst. Generate a detailed Business Requirements Document (BRD) in Markdown format. Structure: 1. Executive Summary, 2. Scope, 3. Functional Requirements, 4. Non-Functional Requirements, 5. User Stories."
         brd_content = llm(brd_sys, req_summary)
         # Save as Markdown
-        with open(os.path.join(WORKSPACE_DIR, "BRD.md"), "w", encoding="utf-8") as f:
+        with open(os.path.join(project_dir, "BRD.md"), "w", encoding="utf-8") as f:
             f.write(brd_content)
         # Save as DOCX
-        docx_brd_path = os.path.join(WORKSPACE_DIR, "BRD.docx")
+        docx_brd_path = os.path.join(project_dir, "BRD.docx")
         save_as_docx("Business Requirements Document (BRD)", brd_content, docx_brd_path)
-        files_list.append({"name": "BRD.docx", "url": "/workspace/BRD.docx", "content": brd_content})
+        files_list.append({"name": "BRD.docx", "url": f"/workspace/{safe_project_id}/BRD.docx", "content": brd_content})
 
     # 2. Generate Functional Requirements Specification (FRS)
     if "Functional Requirements Specification (FRS)" in artifacts_requested:
         frs_sys = "You are a Functional Analyst. Generate a detailed Functional Requirements Specification (FRS) including system behaviors, error handling, and state transitions."
         frs_content = llm(frs_sys, req_summary)
-        with open(os.path.join(WORKSPACE_DIR, "Functional_Requirements.md"), "w", encoding="utf-8") as f:
+        with open(os.path.join(project_dir, "Functional_Requirements.md"), "w", encoding="utf-8") as f:
             f.write(frs_content)
-        docx_frs_path = os.path.join(WORKSPACE_DIR, "Functional_Requirements.docx")
+        docx_frs_path = os.path.join(project_dir, "Functional_Requirements.docx")
         save_as_docx("Functional Requirements Specification (FRS)", frs_content, docx_frs_path)
-        files_list.append({"name": "Functional_Requirements.docx", "url": "/workspace/Functional_Requirements.docx", "content": frs_content})
+        files_list.append({"name": "Functional_Requirements.docx", "url": f"/workspace/{safe_project_id}/Functional_Requirements.docx", "content": frs_content})
 
     # 3. Generate Use Case Specification
     if "Use Case Specification" in artifacts_requested:
         uc_sys = "You are a Business Analyst. Generate a set of detailed Use Case Specifications including primary path, alternate paths, pre-conditions, and post-conditions."
         uc_content = llm(uc_sys, req_summary)
-        with open(os.path.join(WORKSPACE_DIR, "Use_Cases.md"), "w", encoding="utf-8") as f:
+        with open(os.path.join(project_dir, "Use_Cases.md"), "w", encoding="utf-8") as f:
             f.write(uc_content)
-        docx_uc_path = os.path.join(WORKSPACE_DIR, "Use_Cases.docx")
+        docx_uc_path = os.path.join(project_dir, "Use_Cases.docx")
         save_as_docx("Use Case Specification", uc_content, docx_uc_path)
-        files_list.append({"name": "Use_Cases.docx", "url": "/workspace/Use_Cases.docx", "content": uc_content})
+        files_list.append({"name": "Use_Cases.docx", "url": f"/workspace/{safe_project_id}/Use_Cases.docx", "content": uc_content})
 
     # 4. Generate Process Flow Diagram (Miro-designed)
     if "Process Flow Diagram (Miro-designed)" in artifacts_requested:
@@ -390,116 +993,62 @@ async def generate_artifacts(request: Request):
         # 4a. Generate Word doc contents
         flow_sys = "You are a UI/UX Designer and Systems Analyst. Generate a detailed user journey and process flow specification including touchpoints, actions, and system responses."
         flow_content = llm(flow_sys, req_summary)
-        with open(os.path.join(WORKSPACE_DIR, "Process_Flow_Diagram.md"), "w", encoding="utf-8") as f:
+        with open(os.path.join(project_dir, "Process_Flow_Diagram.md"), "w", encoding="utf-8") as f:
             f.write(flow_content)
-        docx_flow_path = os.path.join(WORKSPACE_DIR, "Process_Flow_Diagram.docx")
+        docx_flow_path = os.path.join(project_dir, "Process_Flow_Diagram.docx")
         save_as_docx("Process Flow Diagram Specification", flow_content, docx_flow_path)
-        files_list.append({"name": "Process_Flow_Diagram.docx", "url": "/workspace/Process_Flow_Diagram.docx", "content": flow_content})
+        files_list.append({"name": "Process_Flow_Diagram.docx", "url": f"/workspace/{safe_project_id}/Process_Flow_Diagram.docx", "content": flow_content})
 
-        # 4b. Parse structured flowchart steps for Miro
+        # 4b. Parse a structured swimlane flow (actors, shape-typed steps, decision
+        # branches) for an enterprise-grade Miro diagram - not a flat step list.
         flow_json_sys = """
-You are a UI/UX Designer and Systems Analyst. Analyze the requirements history and generate the key flowchart steps for the user login and dashboard journey.
-Format the output EXACTLY as a JSON array of objects (with no extra markdown styling or backticks):
-[
-  {"title": "Step 1 Title", "text": "Description of step 1"},
-  {"title": "Step 2 Title", "text": "Description of step 2"},
-  ...
-]
+You are a UI/UX Designer and Systems/Process Analyst. Design an enterprise-grade swimlane process flow diagram for the requirement below.
+
+Output ONLY a single JSON object (no markdown, no backticks) with this exact shape:
+{
+  "lanes": ["Actor/System 1", "Actor/System 2"],
+  "steps": [
+    {"id": 1, "lane": "<one of the lanes above>", "type": "start", "title": "...", "text": "...", "next": 2},
+    {"id": 2, "lane": "...", "type": "process", "title": "...", "text": "...", "next": 3},
+    {"id": 3, "lane": "...", "type": "decision", "title": "...", "text": "...",
+     "yes_label": "Valid", "yes_next": 4, "no_label": "Invalid", "no_next": 6},
+    {"id": 4, "lane": "...", "type": "process", "title": "...", "text": "...", "next": 5},
+    {"id": 5, "lane": "...", "type": "end_success", "title": "...", "text": "..."},
+    {"id": 6, "lane": "...", "type": "end_failure", "title": "...", "text": "..."}
+  ]
+}
+Rules:
+- "lanes" must have 2-4 entries, one per distinct actor/system involved (e.g. "User", "API Gateway", "Auth Service").
+- "type" must be one of: start, process, decision, end_success, end_failure.
+- Every non-decision, non-end step must have a "next" id. Every "decision" step must have "yes_next"/"no_next" plus short "yes_label"/"no_label" (e.g. "Valid"/"Invalid", "Approved"/"Rejected").
+- Include at least one decision point and at least one failure/rejection end path - real processes branch.
+- "text" is a concise 1-2 sentence description of what happens at that step.
+- Assign each step to the lane that actually performs it, so the diagram reads as a real cross-functional swimlane flow.
+- Produce 6-12 steps total.
 """
-        steps_raw = llm(flow_json_sys, req_summary)
-        clean_steps_json = steps_raw.replace("```json", "").replace("```", "").strip()
-        flow_steps = []
+        flow_raw = llm(flow_json_sys, req_summary)
+        clean_flow_json = flow_raw.replace("```json", "").replace("```", "").strip()
         try:
-            flow_steps = json.loads(clean_steps_json)
+            flow_data = json.loads(clean_flow_json)
+            if not flow_data.get("steps"):
+                raise ValueError("no steps")
         except Exception:
-            flow_steps = [
-                {"title": "Phase 1: Landing Page", "text": "User arrives at landing page; enters Username and Password."},
-                {"title": "Phase 2: Authentication Check", "text": "System checks credentials and logs attempt with timestamp and IP address."},
-                {"title": "Phase 3: Conditional OTP", "text": "Unrecognized device/IP triggers SMS/Email OTP code requirement."},
-                {"title": "Phase 4: Mandatory MFA", "text": "User completes MFA check (authenticator app or push notification)."},
-                {"title": "Phase 5: Secure Dashboard", "text": "Session established. User redirected to dashboard with masked account numbers."}
-            ]
+            flow_data = {
+                "lanes": ["User", "Web/API Gateway", "Auth Service"],
+                "steps": [
+                    {"id": 1, "lane": "User", "type": "start", "title": "Arrives at Login Page", "text": "User navigates to the login page and enters credentials.", "next": 2},
+                    {"id": 2, "lane": "Web/API Gateway", "type": "process", "title": "Submit Credentials", "text": "Gateway receives the request and forwards it to the Auth Service over HTTPS.", "next": 3},
+                    {"id": 3, "lane": "Auth Service", "type": "decision", "title": "Validate Credentials", "text": "Checks username/password against the identity store.", "yes_label": "Valid", "yes_next": 4, "no_label": "Invalid", "no_next": 7},
+                    {"id": 4, "lane": "Auth Service", "type": "decision", "title": "Device Recognized?", "text": "Checks device fingerprint and IP reputation.", "yes_label": "Trusted", "yes_next": 6, "no_label": "New Device", "no_next": 5},
+                    {"id": 5, "lane": "Auth Service", "type": "process", "title": "Send MFA Challenge", "text": "Issues a one-time passcode via SMS/authenticator app.", "next": 6},
+                    {"id": 6, "lane": "User", "type": "end_success", "title": "Access Granted", "text": "Secure session established; user redirected to dashboard."},
+                    {"id": 7, "lane": "User", "type": "end_failure", "title": "Access Denied", "text": "Generic error shown; failed attempt logged for audit."}
+                ]
+            }
 
-        # 4c. Create flowchart on Miro board
-        miro_board_url = create_miro_flowchart(miro_token, "Online Banking Process Flow Map", flow_steps)
+        # 4c. Create the swimlane flow diagram on a Miro board
+        miro_board_url = create_miro_process_flow(miro_token, f"{project_display_name} - Process Flow Map", flow_data)
         files_list.append({"name": "Miro Process Flow Board (Interactive)", "url": miro_board_url, "external": True})
-
-        # 4d. Generate Mermaid visual flow HTML page
-        flow_mermaid_sys = """
-You are a Systems Analyst. Generate a valid Mermaid flowchart syntax representing the login and OTP verification process.
-Only return the Mermaid syntax inside a standard ```mermaid block.
-Example:
-```mermaid
-graph TD
-    A[Start] --> B[End]
-```
-"""
-        flow_mermaid_raw = llm(flow_mermaid_sys, req_summary)
-        mermaid_code = "graph TD\n    A[Start] --> B[End]"
-        match = re.search(r"```mermaid\s*([\s\S]+?)\s*```", flow_mermaid_raw)
-        if match:
-            mermaid_code = match.group(1).strip()
-        else:
-            # Fallback simple flowchart syntax if matching failed
-            mermaid_code = """graph TD
-    Start[User arrives at Landing Page] --> Credentials[Enter Username & Password]
-    Credentials --> LogAttempt[Log attempt in Audit DB]
-    LogAttempt --> DeviceCheck{Unrecognized Device/IP?}
-    DeviceCheck -- Yes --> OTP[Prompt SMS/Email OTP]
-    OTP --> VerifyOTP[Verify OTP code]
-    VerifyOTP --> MFA[Mandatory MFA challenge]
-    DeviceCheck -- No --> MFA
-    MFA --> Dashboard[Redirect to Dashboard with Masked Accounts]"""
-
-        html_diagram_content = f"""<!DOCTYPE html>
-<html>
-<head>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
-    <script>mermaid.initialize({{startOnLoad:true, theme:'dark'}});</script>
-    <style>
-        body {{
-            background: #0b0f19;
-            color: #e2e8f0;
-            font-family: Arial, sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding: 40px;
-        }}
-        .card {{
-            background: #151f32;
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 12px;
-            padding: 30px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-            max-width: 95%;
-            width: 800px;
-            box-sizing: border-box;
-        }}
-        h2 {{
-            margin-top: 0;
-            font-size: 18px;
-            font-weight: 700;
-            color: #10b981;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-            padding-bottom: 10px;
-            margin-bottom: 20px;
-        }}
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>Interactive Process Flow Diagram</h2>
-        <div class="mermaid">
-            {mermaid_code}
-        </div>
-    </div>
-</body>
-</html>
-"""
-        with open(os.path.join(WORKSPACE_DIR, "Process_Flow_Visualization.html"), "w", encoding="utf-8") as f:
-            f.write(html_diagram_content)
-        files_list.append({"name": "Process_Flow_Visualization.html (Visual Diagram)", "url": "/workspace/Process_Flow_Visualization.html"})
 
     # 5. Generate System Architecture Specification (Miro-designed)
     if "System Architecture Specification (Miro-designed)" in artifacts_requested or "System Architecture Spec" in artifacts_requested:
@@ -509,179 +1058,377 @@ graph TD
 Include a valid Mermaid diagram (inside standard markdown ```mermaid blocks) representing the authentication and backend service flows.
 Make the diagram thorough and descriptive."""
         arch_content = llm(arch_sys, req_summary)
-        with open(os.path.join(WORKSPACE_DIR, "System_Architecture.md"), "w", encoding="utf-8") as f:
+        with open(os.path.join(project_dir, "System_Architecture.md"), "w", encoding="utf-8") as f:
             f.write(arch_content)
 
-        docx_arch_path = os.path.join(WORKSPACE_DIR, "System_Architecture.docx")
+        docx_arch_path = os.path.join(project_dir, "System_Architecture.docx")
         save_as_docx("System Architecture Specification", arch_content, docx_arch_path)
-        files_list.append({"name": "System_Architecture.docx", "url": "/workspace/System_Architecture.docx", "content": arch_content})
+        files_list.append({"name": "System_Architecture.docx", "url": f"/workspace/{safe_project_id}/System_Architecture.docx", "content": arch_content})
 
-        # 5b. Create Miro flowchart for System Architecture
-        arch_steps = [
-            {"title": "UI Tier (Web Browser)", "text": "Renders user dashboard and interfaces. Initiates authentication requests."},
-            {"title": "API Gateway / Guard", "text": "Filters traffic, handles SSL termination, and routes requests to services."},
-            {"title": "Auth Microservice", "text": "Verifies credentials, checks password expiration, and manages sessions."},
-            {"title": "MFA Engine", "text": "Orchestrates TOTP codes, conditional device OTP codes, and push validations."},
-            {"title": "Audit Logger & DB", "text": "Logs all events (IP, timestamp, status) to high-availability database cluster."}
-        ]
-        miro_arch_url = create_miro_flowchart(miro_token, "Online Banking System Architecture Map", arch_steps)
-        files_list.append({"name": "Miro System Architecture Board (Interactive)", "url": miro_arch_url, "external": True})
+        # 5b. Parse a structured layered architecture (tiers, components,
+        # labelled inter-component connections) for an enterprise Miro diagram.
+        arch_json_sys = """
+You are a Systems/Enterprise Architect. Design an enterprise-grade layered system architecture diagram for the requirement below.
 
-        # 5c. Extract Mermaid flow to create an HTML interactive renderer page
-        mermaid_code = "graph TD\n    A[Start] --> B[End]"
-        match = re.search(r"```mermaid\s*([\s\S]+?)\s*```", arch_content)
-        if match:
-            mermaid_code = match.group(1).strip()
-
-        html_diagram_content = f"""<!DOCTYPE html>
-<html>
-<head>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
-    <script>mermaid.initialize({{startOnLoad:true, theme:'dark'}});</script>
-    <style>
-        body {{
-            background: #0b0f19;
-            color: #e2e8f0;
-            font-family: Arial, sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding: 40px;
-        }}
-        .card {{
-            background: #151f32;
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 12px;
-            padding: 30px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-            max-width: 95%;
-            width: 800px;
-            box-sizing: border-box;
-        }}
-        h2 {{
-            margin-top: 0;
-            font-size: 18px;
-            font-weight: 700;
-            color: #3b82f6;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-            padding-bottom: 10px;
-            margin-bottom: 20px;
-        }}
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>Interactive System Process Flow Diagram</h2>
-        <div class="mermaid">
-            {mermaid_code}
-        </div>
-    </div>
-</body>
-</html>
+Output ONLY a single JSON object (no markdown, no backticks) with this exact shape:
+{
+  "tiers": [
+    {"name": "Presentation Tier", "components": [{"title": "...", "text": "..."}]},
+    {"name": "API / Gateway Tier", "components": [{"title": "...", "text": "..."}]},
+    {"name": "Service Tier", "components": [{"title": "...", "text": "..."}]},
+    {"name": "Data Tier", "components": [{"title": "...", "text": "..."}]}
+  ],
+  "connections": [
+    {"from_tier": 0, "from_component": 0, "to_tier": 1, "to_component": 0, "label": "HTTPS/REST"}
+  ]
+}
+Rules:
+- Produce 3-5 tiers ordered top-to-bottom the way real traffic flows (e.g. Presentation -> Gateway -> Service(s) -> Data, with a Security/Cross-cutting tier if relevant).
+- Each tier should have 1-3 concrete components (real service/component names appropriate to this requirement, not generic placeholders).
+- "text" is a concise 1-2 sentence description of that component's responsibility.
+- "connections" must reference valid 0-based tier/component indices from the "tiers" array above, and each "label" should name the protocol or data exchanged (e.g. "HTTPS/REST", "gRPC", "SQL", "Pub/Sub event").
+- Include every meaningful connection, including lateral/cross-tier calls (e.g. Service Tier <-> Security Tier), not just a straight top-to-bottom chain.
 """
-        with open(os.path.join(WORKSPACE_DIR, "Interactive_Process_Flow.html"), "w", encoding="utf-8") as f:
-            f.write(html_diagram_content)
-        files_list.append({"name": "Interactive_Process_Flow.html (Visual Diagram)", "url": "/workspace/Interactive_Process_Flow.html"})
+        arch_json_raw = llm(arch_json_sys, req_summary)
+        clean_arch_json = arch_json_raw.replace("```json", "").replace("```", "").strip()
+        try:
+            arch_data = json.loads(clean_arch_json)
+            if not arch_data.get("tiers"):
+                raise ValueError("no tiers")
+        except Exception:
+            arch_data = {
+                "tiers": [
+                    {"name": "Presentation Tier", "components": [
+                        {"title": "Web App (Browser)", "text": "Renders user dashboard and interfaces; initiates authentication requests."}
+                    ]},
+                    {"name": "API / Gateway Tier", "components": [
+                        {"title": "API Gateway", "text": "Filters traffic, handles SSL termination, and routes requests to backend services."}
+                    ]},
+                    {"name": "Service Tier", "components": [
+                        {"title": "Auth Microservice", "text": "Verifies credentials, checks password expiration, and manages sessions."},
+                        {"title": "MFA Engine", "text": "Orchestrates TOTP codes, device OTP checks, and push validations."}
+                    ]},
+                    {"name": "Data Tier", "components": [
+                        {"title": "Audit Logger & DB", "text": "Logs all events (IP, timestamp, status) to a high-availability database cluster."}
+                    ]}
+                ],
+                "connections": [
+                    {"from_tier": 0, "from_component": 0, "to_tier": 1, "to_component": 0, "label": "HTTPS/REST"},
+                    {"from_tier": 1, "from_component": 0, "to_tier": 2, "to_component": 0, "label": "gRPC"},
+                    {"from_tier": 2, "from_component": 0, "to_tier": 2, "to_component": 1, "label": "Internal call"},
+                    {"from_tier": 2, "from_component": 0, "to_tier": 3, "to_component": 0, "label": "SQL/Write"},
+                    {"from_tier": 2, "from_component": 1, "to_tier": 3, "to_component": 0, "label": "SQL/Write"}
+                ]
+            }
+
+        miro_arch_url = create_miro_architecture_diagram(miro_token, f"{project_display_name} - System Architecture Map", arch_data)
+        files_list.append({"name": "Miro System Architecture Board (Interactive)", "url": miro_arch_url, "external": True})
 
     # 6. Generate Validation Test Scripts (UAT)
     if "Validation Test Scripts (UAT)" in artifacts_requested or "Validation Test Scripts (manual & automated cases)" in artifacts_requested:
         test_sys = "You are a QA Engineer. Generate a comprehensive validation Test Script in Markdown. Include columns for Test Case ID, Description, Steps, Expected Result, and Status."
         test_content = llm(test_sys, req_summary)
-        with open(os.path.join(WORKSPACE_DIR, "Test_Scripts.md"), "w", encoding="utf-8") as f:
+        with open(os.path.join(project_dir, "Test_Scripts.md"), "w", encoding="utf-8") as f:
             f.write(test_content)
 
-        docx_test_path = os.path.join(WORKSPACE_DIR, "Test_Scripts.docx")
+        docx_test_path = os.path.join(project_dir, "Test_Scripts.docx")
         save_as_docx("Validation Test Scripts", test_content, docx_test_path)
-        test_scripts_list.append({"name": "Test_Scripts.docx", "url": "/workspace/Test_Scripts.docx", "content": test_content})
-        files_list.append({"name": "Test_Scripts.docx", "url": "/workspace/Test_Scripts.docx", "content": test_content})
+        test_scripts_list.append({"name": "Test_Scripts.docx", "url": f"/workspace/{safe_project_id}/Test_Scripts.docx", "content": test_content})
+        files_list.append({"name": "Test_Scripts.docx", "url": f"/workspace/{safe_project_id}/Test_Scripts.docx", "content": test_content})
 
-    # 7. Generate User Story Map & Sprint Backlog
-    if "User Story Map & Sprint Backlog" in artifacts_requested or "User Story Map" in artifacts_requested:
+    # 7. Generate User Story Map & Sprint Backlog (Epic -> Story/Task -> Subtask)
+    story_map_requested = "User Story Map & Sprint Backlog" in artifacts_requested or "User Story Map" in artifacts_requested
+    if story_map_requested:
         stories_sys = """
-You are a Product Owner. Generate a list of recommended User Stories, tasks, and subtasks to push to Jira based on the final requirements.
-Format the output EXACTLY as a JSON array of objects, with no extra markdown styling or backticks:
+You are a Product Owner. Generate a recommended Jira work breakdown for the final requirements, structured as a hierarchy.
+This Jira site's hierarchy has exactly 3 levels: Epic at the top; Story and Task are PEERS directly under an Epic (never nest a Task under a Story); Subtask is the only level below, nested under a Story or a Task.
+
+Format the output EXACTLY as a JSON array of objects, with no extra markdown styling or backticks. Each object has "issuetype", "summary", "description", "priority", and "children" (omit or use [] when there are none):
 [
-  {"summary": "Story summary", "issuetype": "Story", "description": "Story description", "priority": "Medium"},
-  {"summary": "Task summary", "issuetype": "Task", "description": "Task description", "priority": "High"},
-  {"summary": "Subtask summary", "issuetype": "Subtask", "description": "Subtask description", "priority": "Low"}
+  {"issuetype": "Epic", "summary": "Epic summary", "description": "...", "priority": "High", "children": [
+    {"issuetype": "Story", "summary": "Story summary", "description": "...", "priority": "High", "children": [
+      {"issuetype": "Subtask", "summary": "Subtask summary", "description": "...", "priority": "Low"}
+    ]},
+    {"issuetype": "Task", "summary": "Task summary", "description": "...", "priority": "Medium", "children": []}
+  ]}
 ]
+A top-level entry may also be a standalone "Story" or "Task" with no Epic if it doesn't belong under one. Produce 1-3 Epics, each with a few Stories/Tasks, and Subtasks only where they add real value.
 """
         stories_content_raw = llm(stories_sys, req_summary)
         clean_json = stories_content_raw.replace("```json", "").replace("```", "").strip()
         try:
-            recommended_stories = json.loads(clean_json)
+            work_item_tree = _sanitize_work_item_tree(json.loads(clean_json))
         except Exception:
             pass
 
         # Write a user stories docx file and add to files_list
         stories_docx_sys = "You are a Product Owner. Generate a detailed User Story Map & Sprint Backlog with User Stories, Tasks, and Acceptance Criteria in Markdown."
         stories_docx_content = llm(stories_docx_sys, req_summary)
-        with open(os.path.join(WORKSPACE_DIR, "User_Stories.md"), "w", encoding="utf-8") as f:
+        with open(os.path.join(project_dir, "User_Stories.md"), "w", encoding="utf-8") as f:
             f.write(stories_docx_content)
-        docx_stories_path = os.path.join(WORKSPACE_DIR, "User_Stories.docx")
+        docx_stories_path = os.path.join(project_dir, "User_Stories.docx")
         save_as_docx("User Story Map & Sprint Backlog", stories_docx_content, docx_stories_path)
-        files_list.append({"name": "User_Stories.docx", "url": "/workspace/User_Stories.docx", "content": stories_docx_content})
+        files_list.append({"name": "User_Stories.docx", "url": f"/workspace/{safe_project_id}/User_Stories.docx", "content": stories_docx_content})
 
-    if not recommended_stories:
-        recommended_stories = [
-            {"summary": "Implement login MFA component", "issuetype": "Story", "description": "As a customer, I want to authenticate securely via SMS/Email OTP.", "priority": "High"},
-            {"summary": "Add real-time transaction balance validation", "issuetype": "Task", "description": "Validate source account funds prior to transfer execution.", "priority": "High"},
-            {"summary": "Configure system transaction audit logging", "issuetype": "Task", "description": "Log all transaction attempts to database.", "priority": "Medium"}
-        ]
+        # Safety net for this artifact only - if the LLM's JSON came back
+        # unparseable, still leave a usable starting draft rather than an
+        # empty tree. Deliberately scoped inside `story_map_requested`: a
+        # request that never asked for the story map must never touch the
+        # project's Jira work items at all (see below).
+        if not work_item_tree:
+            work_item_tree = [
+                {"issuetype": "Epic", "summary": "Secure Customer Authentication", "description": "Deliver MFA-based login for customers.", "priority": "High", "children": [
+                    {"issuetype": "Story", "summary": "Implement login MFA component", "description": "As a customer, I want to authenticate securely via SMS/Email OTP.", "priority": "High", "children": []},
+                    {"issuetype": "Task", "summary": "Configure system transaction audit logging", "description": "Log all transaction attempts to database.", "priority": "Medium", "children": []},
+                ]},
+            ]
+
+    raw_project_id = body.get("project_id")
+    if raw_project_id:
+        try:
+            # Merge with whatever the project already has instead of a full
+            # replace - a scoped request (e.g. "just rework the process flow
+            # diagram") only regenerates what it names via `files_list`, and
+            # must not delete every other previously generated artifact.
+            existing = db.get_project(raw_project_id)
+            existing_artifacts = (existing or {}).get("artifacts", [])
+            merged_by_name = {
+                a["name"]: {"name": a["name"], "url": a["url"], "content": a.get("content"), "external": bool(a.get("is_external"))}
+                for a in existing_artifacts
+            }
+            existing_test_script_names = {a["name"] for a in existing_artifacts if a.get("is_test_script")}
+            for f in files_list:
+                merged_by_name[f["name"]] = f
+            test_script_names = existing_test_script_names | {t.get("name") for t in test_scripts_list}
+            db.replace_artifacts(raw_project_id, list(merged_by_name.values()), test_script_names)
+
+            # Likewise, only touch work items when the story map was actually
+            # part of this request - otherwise a scoped, unrelated request
+            # would wipe the project's real draft Jira tasks and replace them
+            # with the safety-net placeholder above.
+            if story_map_requested:
+                db.replace_unsynced_work_items(raw_project_id, work_item_tree)
+            # Re-fetch from the DB so the response (and the RTM test-case step
+            # below) reflect the project's true current tree either way - real
+            # ids/codes for the frontend, and the actual persisted state for a
+            # request that didn't touch work items at all.
+            work_item_tree = db.get_work_item_tree(raw_project_id)
+        except Exception:
+            pass  # generation already succeeded and files are on disk; don't fail the response over a persistence hiccup
+
+        # 8. Generate structured, Jira-traceable Test Cases for the RTM - each
+        # one explicitly linked to a Story/Task code from the tree just persisted
+        # above, so the Trace Matrix can show real coverage instead of a guess.
+        if work_item_tree and ("Validation Test Scripts (UAT)" in artifacts_requested or "Validation Test Scripts (manual & automated cases)" in artifacts_requested):
+            linkable_items = []
+
+            def _collect_linkable(nodes):
+                for n in nodes:
+                    if n.get("issuetype") in ("Story", "Task") and n.get("code"):
+                        linkable_items.append({"code": n["code"], "summary": n.get("summary")})
+                    _collect_linkable(n.get("children") or [])
+
+            _collect_linkable(work_item_tree)
+
+            if linkable_items:
+                tc_sys = f"""
+You are a QA Engineer. Write concrete test cases that validate the following user stories/tasks. Write 1-2 test cases for EACH one listed - every code must be covered by at least one test case.
+
+Stories/Tasks to cover:
+{json.dumps(linkable_items, indent=2)}
+
+Output ONLY a JSON array of objects (no markdown, no backticks):
+[
+  {{"linked_code": "STY001", "title": "Concise test case title", "steps": "1. ...\\n2. ...\\n3. ...", "expected_result": "...", "priority": "High"}}
+]
+"linked_code" MUST be exactly one of the codes listed above (case-sensitive, no other text).
+"""
+                tc_raw = llm(tc_sys, req_summary)
+                clean_tc_json = tc_raw.replace("```json", "").replace("```", "").strip()
+                try:
+                    test_cases_data = json.loads(clean_tc_json)
+                    db.replace_test_cases(raw_project_id, test_cases_data)
+                except Exception:
+                    pass
 
     return JSONResponse({
         "success": True,
         "files": files_list,
         "test_scripts": test_scripts_list,
-        "recommended_stories": recommended_stories
+        "work_items": work_item_tree
     })
 
 
 # ============================================================
-# CREATE MULTIPLE JIRA ISSUES ENDPOINT
+# PUSH WORK ITEMS TO JIRA (hierarchy-aware)
 # ============================================================
 
-@app.post("/jira/create_bulk")
-async def jira_create_bulk(request: Request):
+@app.post("/jira/push_work_items")
+async def jira_push_work_items(request: Request):
+    """
+    Pushes selected work_items rows to Jira, respecting the real 3-level
+    hierarchy (Epic -> Story/Task -> Subtask) via Jira's `parent` field.
+    `parent_overrides` (local work_item id -> jira key or null) is supplied
+    by the frontend when the user picked a parent for an item whose real
+    DB parent isn't selected/synced in this batch - if an item's parent
+    still can't be resolved after that, it's reported as a failure rather
+    than silently created as an orphan or sent to Jira and rejected there.
+    """
     if not jira_configured():
         return JSONResponse({"error": "Jira not configured"}, status_code=503)
     try:
         body = await request.json()
-        issues_list = body.get("issues", [])
-        
+        project_id = body.get("project_id")
+        item_ids = body.get("item_ids", [])
+        parent_overrides = {int(k): v for k, v in (body.get("parent_overrides") or {}).items()}
+
+        if not project_id or not item_ids:
+            return JSONResponse({"error": "project_id and item_ids are required"}, status_code=400)
+
+        jira_key, _ = resolve_project_keys(project_id)
         headers, auth = jira_headers()
-        created_keys = []
-        
-        for item in issues_list:
-            payload = {
-                "fields": {
-                    "project": {"key": JIRA_PROJECT_KEY},
-                    "summary": item.get("summary", "New Item"),
-                    "issuetype": {"name": item.get("issuetype", "Task")},
-                }
-            }
-            desc = item.get("description", "")
-            if desc:
-                payload["fields"]["description"] = {
-                    "type": "doc",
-                    "version": 1,
-                    "content": [{"type": "paragraph", "content": [{"type": "text", "text": desc}]}]
-                }
-            priority = item.get("priority", "")
-            if priority:
-                payload["fields"]["priority"] = {"name": priority}
 
-            kwargs = {"headers": headers, "json": payload, "verify": JIRA_SSL_VERIFY, "timeout": 15}
-            if auth:
-                kwargs["auth"] = auth
+        all_items = {item["id"]: item for item in db.get_all_work_items(project_id)}
+        pending = [all_items[i] for i in item_ids if i in all_items]
 
-            r = requests.post(f"{JIRA_URL}/rest/api/3/issue", **kwargs)
-            if r.status_code in (200, 201):
-                created_keys.append(r.json().get("key"))
-        
-        return JSONResponse({"success": True, "created": created_keys})
+        resolved_jira_key = {item["id"]: item["jira_key"] for item in all_items.values() if item.get("jira_key")}
+        results = []
+        synced_updates = []
+
+        remaining = pending
+        for _ in range(4):  # 3 hierarchy levels + one safety margin
+            if not remaining:
+                break
+            still_waiting = []
+            for item in remaining:
+                parent_id = item.get("parent_id")
+                parent_key = None
+                if parent_id is not None:
+                    if parent_id in resolved_jira_key:
+                        parent_key = resolved_jira_key[parent_id]
+                    elif item["id"] in parent_overrides:
+                        parent_key = parent_overrides[item["id"]]
+                    else:
+                        still_waiting.append(item)
+                        continue
+                elif item["id"] in parent_overrides and parent_overrides[item["id"]]:
+                    parent_key = parent_overrides[item["id"]]
+
+                if item["issuetype"] == "Subtask" and not parent_key:
+                    results.append({"id": item["id"], "success": False, "error": "Subtask requires a parent"})
+                    continue
+
+                payload = {
+                    "fields": {
+                        "project": {"key": jira_key},
+                        "summary": item.get("summary", "New Item"),
+                        "issuetype": {"name": item.get("issuetype", "Task")},
+                    }
+                }
+                desc = item.get("description") or ""
+                if desc:
+                    payload["fields"]["description"] = {
+                        "type": "doc",
+                        "version": 1,
+                        "content": [{"type": "paragraph", "content": [{"type": "text", "text": desc}]}]
+                    }
+                priority = item.get("priority") or ""
+                if priority:
+                    payload["fields"]["priority"] = {"name": priority}
+                if parent_key:
+                    payload["fields"]["parent"] = {"key": parent_key}
+
+                kwargs = {"headers": headers, "json": payload, "verify": JIRA_SSL_VERIFY, "timeout": 15}
+                if auth:
+                    kwargs["auth"] = auth
+
+                r = requests.post(f"{JIRA_URL}/rest/api/3/issue", **kwargs)
+                if r.status_code in (200, 201):
+                    key = r.json().get("key")
+                    resolved_jira_key[item["id"]] = key
+                    synced_updates.append({"id": item["id"], "jira_key": key})
+                    results.append({"id": item["id"], "success": True, "jira_key": key})
+                else:
+                    results.append({"id": item["id"], "success": False, "error": r.text})
+            remaining = still_waiting
+
+        for item in remaining:
+            results.append({"id": item["id"], "success": False, "error": "Unresolved parent"})
+
+        if synced_updates:
+            try:
+                db.mark_work_items_synced(project_id, synced_updates)
+            except Exception:
+                pass
+
+        return JSONResponse({"success": True, "results": results})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.delete("/jira/work_items/{item_id}")
+async def delete_work_item(item_id: int):
+    """
+    Deletes a work item from the local tree, and (best-effort) the matching
+    Jira issue if it was already synced - including any of its descendants
+    that were synced too (e.g. deleting a Story also removes its Subtasks in
+    Jira). Local removal always cascades via the FK regardless of whether
+    the Jira-side deletes all succeeded, so a Jira hiccup never blocks
+    clearing something out of the planning view.
+    """
+    subtree = db.get_work_item_subtree(item_id)
+    if not subtree:
+        return JSONResponse({"error": "Work item not found"}, status_code=404)
+
+    jira_deleted = []
+    jira_failed = []
+
+    synced_items = [i for i in subtree if i.get("jira_key")]
+    if synced_items:
+        if not jira_configured():
+            return JSONResponse({"error": "Jira not configured"}, status_code=503)
+        headers, auth = jira_headers()
+        for item in synced_items:
+            kwargs = {"headers": headers, "params": {"deleteSubtasks": "true"}, "verify": JIRA_SSL_VERIFY, "timeout": 15}
+            if auth:
+                kwargs["auth"] = auth
+            r = requests.delete(f"{JIRA_URL}/rest/api/3/issue/{item['jira_key']}", **kwargs)
+            if r.status_code in (204, 404):
+                jira_deleted.append(item["jira_key"])
+            else:
+                jira_failed.append({"key": item["jira_key"], "error": r.text})
+
+    db.delete_work_item(item_id)
+
+    return JSONResponse({"success": True, "jira_deleted": jira_deleted, "jira_failed": jira_failed})
+
+
+@app.delete("/jira/issues/{issue_key}")
+async def delete_jira_issue(issue_key: str):
+    """
+    Deletes a Jira issue directly by key - used from the 'Live in Jira' pane,
+    which may show issues that were never tracked as a local work item (e.g.
+    created before this feature, or outside this app). If a local work item
+    does point at this key, it reverts to an unsynced draft instead of being
+    left with a dangling reference.
+    """
+    if not jira_configured():
+        return JSONResponse({"error": "Jira not configured"}, status_code=503)
+    try:
+        headers, auth = jira_headers()
+        kwargs = {"headers": headers, "params": {"deleteSubtasks": "true"}, "verify": JIRA_SSL_VERIFY, "timeout": 15}
+        if auth:
+            kwargs["auth"] = auth
+        r = requests.delete(f"{JIRA_URL}/rest/api/3/issue/{issue_key}", **kwargs)
+        if r.status_code in (204, 404):
+            try:
+                db.clear_work_item_sync_by_jira_key(issue_key)
+            except Exception:
+                pass
+            return JSONResponse({"success": True})
+        return JSONResponse({"success": False, "error": r.text})
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)})
 
 
 # ============================================================
@@ -704,7 +1451,11 @@ async def confluence_publish(request: Request):
         content = body.get("content")
 
         if content is None:
-            brd_path = os.path.join(WORKSPACE_DIR, "BRD.md")
+            project_dir, _ = get_project_dir(body.get("project_id"))
+            brd_path = os.path.join(project_dir, "BRD.md")
+            if not os.path.exists(brd_path):
+                # Legacy fallback: projects created before per-project folders existed
+                brd_path = os.path.join(WORKSPACE_DIR, "BRD.md")
             if os.path.exists(brd_path):
                 with open(brd_path, "r", encoding="utf-8") as f:
                     content = f.read()
@@ -715,17 +1466,11 @@ async def confluence_publish(request: Request):
         html_content = content.replace("\n", "<br>").replace("### ", "<h3>").replace("## ", "<h2>").replace("# ", "<h1>")
 
         headers, auth = jira_headers()
-        space_key = JIRA_PROJECT_KEY
+        _, space_key = resolve_project_keys(body.get("project_id"))
 
-        # 1. Resolve the space key to the numeric space ID the v2 API requires
-        get_kwargs = {"headers": headers, "params": {"keys": space_key}, "verify": JIRA_SSL_VERIFY, "timeout": 15}
-        if auth:
-            get_kwargs["auth"] = auth
-        space_r = requests.get(f"{JIRA_URL}/wiki/api/v2/spaces", **get_kwargs)
-        space_results = space_r.json().get("results", []) if space_r.status_code == 200 else []
-        if not space_results:
+        space_id = get_confluence_space_id(space_key, headers, auth)
+        if not space_id:
             return JSONResponse({"success": False, "error": f"No Confluence space found with key '{space_key}'. Create a space with that key first."})
-        space_id = space_results[0]["id"]
 
         payload = {
             "spaceId": space_id,
@@ -746,9 +1491,68 @@ async def confluence_publish(request: Request):
         if r.status_code in (200, 201):
             page_id = r.json().get("id")
             page_url = f"{JIRA_URL}/wiki/spaces/{space_key}/pages/{page_id}"
+            if body.get("project_id"):
+                try:
+                    db.add_confluence_synced(body.get("project_id"), title, page_url)
+                except Exception:
+                    pass
             return JSONResponse({"success": True, "url": page_url})
         else:
             return JSONResponse({"success": False, "error": r.text})
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)})
+
+
+@app.get("/confluence/pages")
+async def confluence_pages(project_id: str = None):
+    """
+    Live query of what pages actually exist right now in the project's
+    Confluence space (not a locally-tracked record of what this app has
+    pushed) — used to show the real current state in the Artifacts tab.
+    """
+    if not jira_configured():
+        return JSONResponse({"error": "Atlassian credentials not configured"}, status_code=503)
+    try:
+        headers, auth = jira_headers()
+        _, space_key = resolve_project_keys(project_id)
+
+        space_id = get_confluence_space_id(space_key, headers, auth)
+        if not space_id:
+            return JSONResponse({"success": True, "pages": []})
+
+        pages_kwargs = {"headers": headers, "params": {"space-id": space_id, "limit": 50, "sort": "-modified-date"}, "verify": JIRA_SSL_VERIFY, "timeout": 15}
+        if auth:
+            pages_kwargs["auth"] = auth
+        pages_r = requests.get(f"{JIRA_URL}/wiki/api/v2/pages", **pages_kwargs)
+        if pages_r.status_code != 200:
+            return JSONResponse({"success": False, "error": pages_r.text})
+
+        pages = [
+            {
+                "id": p.get("id"),
+                "title": p.get("title"),
+                "url": f"{JIRA_URL}/wiki/spaces/{space_key}/pages/{p.get('id')}"
+            }
+            for p in pages_r.json().get("results", [])
+        ]
+        return JSONResponse({"success": True, "pages": pages, "space_key": space_key})
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)})
+
+
+@app.delete("/confluence/pages/{page_id}")
+async def delete_confluence_page(page_id: str):
+    if not jira_configured():
+        return JSONResponse({"error": "Atlassian credentials not configured"}, status_code=503)
+    try:
+        headers, auth = jira_headers()
+        kwargs = {"headers": headers, "verify": JIRA_SSL_VERIFY, "timeout": 15}
+        if auth:
+            kwargs["auth"] = auth
+        r = requests.delete(f"{JIRA_URL}/wiki/api/v2/pages/{page_id}", **kwargs)
+        if r.status_code in (200, 204):
+            return JSONResponse({"success": True})
+        return JSONResponse({"success": False, "error": r.text})
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)})
 
@@ -818,56 +1622,109 @@ async def get_index():
     with open("index.html", "r", encoding="utf-8") as f:
         return f.read()
 
-@app.get("/artifacts/recover")
-async def artifacts_recover():
-    """
-    Rebuilds an artifact manifest from whatever .docx/.html files already
-    exist on disk in WORKSPACE_DIR. Used to recover a project's Artifacts
-    tab when the browser's saved manifest was lost (e.g. generated before
-    client-side persistence was added). Reads the matching .md sidecar
-    (same base filename) as the document's viewable/draggable content when
-    present. Miro board links cannot be recovered this way since they are
-    never written to disk.
-    """
+def _scan_artifacts_dir(dir_path, url_prefix):
+    """Only .docx specs are recoverable - HTML diagram pages are intentionally
+    not surfaced (see /chat/generate_artifacts, which stopped generating them)."""
     files_list = []
-    if os.path.isdir(WORKSPACE_DIR):
-        for fname in sorted(os.listdir(WORKSPACE_DIR)):
+    if os.path.isdir(dir_path):
+        for fname in sorted(os.listdir(dir_path)):
             base, ext = os.path.splitext(fname)
             if ext == ".docx":
-                entry = {"name": fname, "url": f"/workspace/{fname}"}
-                md_path = os.path.join(WORKSPACE_DIR, base + ".md")
+                entry = {"name": fname, "url": f"{url_prefix}/{fname}"}
+                md_path = os.path.join(dir_path, base + ".md")
                 if os.path.exists(md_path):
                     with open(md_path, "r", encoding="utf-8") as f:
                         entry["content"] = f.read()
                 files_list.append(entry)
-            elif ext == ".html":
-                files_list.append({"name": f"{fname} (Visual Diagram)", "url": f"/workspace/{fname}"})
+    return files_list
+
+@app.get("/artifacts/recover")
+async def artifacts_recover(project_id: str = None):
+    """
+    Rebuilds an artifact manifest from whatever .docx/.html files already
+    exist on disk for this project. Used to recover a project's Artifacts
+    tab when the browser's saved manifest was lost (e.g. generated before
+    client-side persistence was added). Reads the matching .md sidecar
+    (same base filename) as the document's viewable/draggable content when
+    present. Miro board links cannot be recovered this way since they are
+    never written to disk. Falls back to the legacy workspace root if the
+    project's own subfolder is empty (projects created before per-project
+    folders existed).
+    """
+    project_dir, safe_project_id = get_project_dir(project_id)
+    files_list = _scan_artifacts_dir(project_dir, f"/workspace/{safe_project_id}")
+    if not files_list:
+        files_list = _scan_artifacts_dir(WORKSPACE_DIR, "/workspace")
+        if project_id and files_list:
+            try:
+                db.add_artifacts(project_id, files_list)
+            except Exception:
+                pass
     return JSONResponse({"success": True, "files": files_list})
 
+@app.delete("/artifacts/file/{filename}")
+async def delete_artifact_file(filename: str, project_id: str = None):
+    """
+    Deletes a generated artifact (and its .md sidecar, if any). Tries the
+    project's own subfolder first, then falls back to the legacy workspace
+    root for projects created before per-project folders existed.
+    """
+    safe_name = os.path.basename(filename)
+    if not safe_name or safe_name in (".", ".."):
+        return JSONResponse({"success": False, "error": "Invalid filename"}, status_code=400)
+
+    project_dir, _ = get_project_dir(project_id)
+    file_path = None
+    for base_dir in (project_dir, WORKSPACE_DIR):
+        candidate = os.path.join(base_dir, safe_name)
+        if os.path.isfile(candidate):
+            file_path = candidate
+            break
+
+    if not file_path:
+        return JSONResponse({"success": False, "error": "File not found"}, status_code=404)
+
+    try:
+        os.remove(file_path)
+        base, _ = os.path.splitext(file_path)
+        md_path = base + ".md"
+        if os.path.exists(md_path):
+            os.remove(md_path)
+        if project_id:
+            try:
+                db.delete_artifact_by_name(project_id, safe_name)
+            except Exception:
+                pass
+        return JSONResponse({"success": True})
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
 @app.get("/jira/status")
-async def jira_status():
+async def jira_status(project_id: str = None):
     if not jira_configured():
         return JSONResponse({"connected": False, "error": "Not configured"})
     try:
+        jira_key, _ = resolve_project_keys(project_id)
         headers, auth = jira_headers()
         kwargs = {"headers": headers, "verify": JIRA_SSL_VERIFY, "timeout": 8}
         if auth:
             kwargs["auth"] = auth
         r = requests.get(f"{JIRA_URL}/rest/api/3/myself", **kwargs)
         if r.status_code == 200:
-            return JSONResponse({"connected": True, "project": JIRA_PROJECT_KEY, "jira_url": JIRA_URL})
+            return JSONResponse({"connected": True, "project": jira_key, "jira_url": JIRA_URL})
         return JSONResponse({"connected": False})
     except Exception:
         return JSONResponse({"connected": False})
 
 @app.get("/jira/issues")
-async def jira_issues(status: str = "all", max_results: int = 50):
+async def jira_issues(status: str = "all", max_results: int = 50, project_id: str = None):
     if not jira_configured():
         return JSONResponse({"error": "Jira not configured"}, status_code=503)
     try:
+        jira_key, _ = resolve_project_keys(project_id)
         headers, auth = jira_headers()
-        jql = f"project = {JIRA_PROJECT_KEY} ORDER BY updated DESC"
-        params = {"jql": jql, "maxResults": max_results, "fields": "summary,status,assignee,priority,issuetype,url"}
+        jql = f"project = {jira_key} ORDER BY updated DESC"
+        params = {"jql": jql, "maxResults": max_results, "fields": "summary,status,assignee,priority,issuetype,parent,url"}
         kwargs = {"headers": headers, "params": params, "verify": JIRA_SSL_VERIFY, "timeout": 15}
         if auth:
             kwargs["auth"] = auth
@@ -878,17 +1735,217 @@ async def jira_issues(status: str = "all", max_results: int = 50):
         for issue in data.get("issues", []):
             f = issue.get("fields", {})
             status_obj = f.get("status", {})
+            parent_obj = f.get("parent")
             issues.append({
                 "key": issue["key"],
                 "summary": f.get("summary", ""),
                 "status": status_obj.get("name", "Unknown"),
                 "priority": (f.get("priority") or {}).get("name", "Medium"),
                 "issueType": (f.get("issuetype") or {}).get("name", "Task"),
+                "parentKey": parent_obj.get("key") if parent_obj else None,
                 "url": f"{JIRA_URL}/browse/{issue['key']}",
             })
         return JSONResponse({"issues": issues})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/rtm/{project_id}")
+async def get_rtm(project_id: str):
+    """
+    Requirements Traceability Matrix: Epic -> Story/Task -> Test Case, one
+    row per (requirement, test case) pair - requirements with no test case
+    yet get a single "not covered" row. Jira status is fetched live here (a
+    single batched JQL lookup by key) rather than cached, since it changes
+    outside this app; the lookup is best-effort so a Jira hiccup still
+    renders the local matrix with jira_status left null.
+    """
+    try:
+        rows = db.get_rtm_rows(project_id)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    jira_keys = sorted({r["jira_key"] for r in rows if r.get("jira_key")})
+    status_by_key = {}
+    url_by_key = {}
+    if jira_keys and jira_configured():
+        try:
+            headers, auth = jira_headers()
+            jql = "key in (" + ",".join(jira_keys) + ")"
+            params = {"jql": jql, "maxResults": len(jira_keys), "fields": "status"}
+            kwargs = {"headers": headers, "params": params, "verify": JIRA_SSL_VERIFY, "timeout": 15}
+            if auth:
+                kwargs["auth"] = auth
+            r = requests.get(f"{JIRA_URL}/rest/api/3/search/jql", **kwargs)
+            if r.status_code == 200:
+                for issue in r.json().get("issues", []):
+                    status_by_key[issue["key"]] = (issue.get("fields", {}).get("status") or {}).get("name", "Unknown")
+                    url_by_key[issue["key"]] = f"{JIRA_URL}/browse/{issue['key']}"
+        except Exception:
+            pass
+
+    for row in rows:
+        key = row.get("jira_key")
+        row["jira_status"] = status_by_key.get(key) if key else None
+        row["jira_url"] = url_by_key.get(key) if key else None
+
+    item_ids = {r["item_id"] for r in rows}
+    covered_ids = {r["item_id"] for r in rows if r["covered"]}
+    total = len(item_ids)
+    covered = len(covered_ids)
+
+    return JSONResponse({
+        "rows": rows,
+        "summary": {
+            "total_requirements": total,
+            "covered": covered,
+            "not_covered": total - covered,
+            "coverage_pct": round((covered / total) * 100, 1) if total else 0,
+        }
+    })
+
+
+ISSUETYPE_ORDER = ["Epic", "Story", "Task", "Subtask"]
+PRIORITY_ORDER = ["High", "Medium", "Low"]
+TEST_STATUS_ORDER = ["Pass", "Fail", "Not Run"]
+
+
+def _ordered_counts(counts, order):
+    """Sorts a {label: count} dict into a canonical display order, with any
+    unexpected labels appended after (alphabetically) rather than dropped."""
+    known = [{"label": k, "count": counts[k]} for k in order if k in counts]
+    extra = sorted(k for k in counts if k not in order)
+    known += [{"label": k, "count": counts[k]} for k in extra]
+    return known
+
+
+@app.get("/dashboard/{project_id}")
+async def get_dashboard(project_id: str):
+    """
+    Aggregates everything the project dashboard needs into one call: work
+    item mix, Jira sync rate, RTM coverage, test case status, live Jira
+    status (best-effort), and per-Epic sync progress. Each section degrades
+    independently on failure (empty/zero) rather than failing the whole
+    dashboard over one flaky piece (matches the resilience pattern used by
+    /rtm and /jira/issues elsewhere in this file).
+    """
+    try:
+        items = db.get_all_work_items(project_id)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    type_counts, priority_counts = {}, {}
+    synced = 0
+    for it in items:
+        t = it.get("issuetype", "Unknown")
+        type_counts[t] = type_counts.get(t, 0) + 1
+        if it.get("jira_key"):
+            synced += 1
+        if it.get("issuetype") in ("Epic", "Story", "Task"):
+            p = it.get("priority") or "Unassigned"
+            priority_counts[p] = priority_counts.get(p, 0) + 1
+
+    total_items = len(items)
+    sync_rate = round((synced / total_items) * 100, 1) if total_items else 0.0
+
+    try:
+        rtm_rows = db.get_rtm_rows(project_id)
+        req_ids = {r["item_id"] for r in rtm_rows}
+        covered_ids = {r["item_id"] for r in rtm_rows if r["covered"]}
+        total_reqs, covered = len(req_ids), len(covered_ids)
+    except Exception:
+        total_reqs, covered = 0, 0
+    coverage_pct = round((covered / total_reqs) * 100, 1) if total_reqs else 0.0
+
+    try:
+        test_cases = db.get_test_cases(project_id)
+    except Exception:
+        test_cases = []
+    tc_status_counts = {}
+    for tc in test_cases:
+        s = tc.get("status") or "Not Run"
+        tc_status_counts[s] = tc_status_counts.get(s, 0) + 1
+
+    try:
+        proj = db.get_project(project_id)
+    except Exception:
+        proj = None
+    artifacts_count = len(proj.get("artifacts", [])) if proj else 0
+    confluence_count = len(proj.get("confluence_synced", [])) if proj else 0
+
+    jira_status_counts = {}
+    jira_open = jira_done = 0
+    if jira_configured():
+        try:
+            jira_key, _ = resolve_project_keys(project_id)
+            headers, auth = jira_headers()
+            params = {"jql": f"project = {jira_key} ORDER BY updated DESC", "maxResults": 100, "fields": "status"}
+            kwargs = {"headers": headers, "params": params, "verify": JIRA_SSL_VERIFY, "timeout": 15}
+            if auth:
+                kwargs["auth"] = auth
+            r = requests.get(f"{JIRA_URL}/rest/api/3/search/jql", **kwargs)
+            if r.status_code == 200:
+                for issue in r.json().get("issues", []):
+                    st = (issue.get("fields", {}).get("status") or {}).get("name", "Unknown")
+                    jira_status_counts[st] = jira_status_counts.get(st, 0) + 1
+                    if any(k in st.lower() for k in ("done", "closed", "resolved")):
+                        jira_done += 1
+                    else:
+                        jira_open += 1
+        except Exception:
+            pass
+
+    by_id = {it["id"]: it for it in items}
+    children_of = {}
+    for it in items:
+        if it.get("parent_id"):
+            children_of.setdefault(it["parent_id"], []).append(it["id"])
+
+    def collect_subtree(node_id):
+        acc = [node_id]
+        for c in children_of.get(node_id, []):
+            acc.extend(collect_subtree(c))
+        return acc
+
+    epic_progress = []
+    for it in items:
+        if it.get("issuetype") == "Epic":
+            subtree_items = [by_id[i] for i in collect_subtree(it["id"])]
+            total = len(subtree_items)
+            synced_n = sum(1 for x in subtree_items if x.get("jira_key"))
+            epic_progress.append({
+                "code": it.get("code"),
+                "summary": it.get("summary"),
+                "total": total,
+                "synced": synced_n,
+                "pct": round((synced_n / total) * 100, 1) if total else 0.0
+            })
+    epic_progress.sort(key=lambda e: e.get("code") or "")
+
+    return JSONResponse({
+        "kpis": {
+            "total_work_items": total_items,
+            "total_requirements": total_reqs,
+            "jira_synced": synced,
+            "jira_total": total_items,
+            "sync_rate_pct": sync_rate,
+            "coverage_pct": coverage_pct,
+            "covered": covered,
+            "not_covered": total_reqs - covered,
+            "artifacts_count": artifacts_count,
+            "confluence_synced_count": confluence_count,
+            "jira_open": jira_open,
+            "jira_done": jira_done,
+        },
+        "work_item_breakdown": _ordered_counts(type_counts, ISSUETYPE_ORDER),
+        "priority_distribution": _ordered_counts(priority_counts, PRIORITY_ORDER),
+        "test_case_status": _ordered_counts(tc_status_counts, TEST_STATUS_ORDER),
+        "jira_status_breakdown": sorted(
+            ({"label": k, "count": v} for k, v in jira_status_counts.items()),
+            key=lambda x: -x["count"]
+        ),
+        "epic_progress": epic_progress
+    })
+
 
 if __name__ == "__main__":
     import uvicorn
