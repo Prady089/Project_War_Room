@@ -9,9 +9,9 @@ load_dotenv()
 # BRAND & DIRECTORY CONFIG
 # ============================================================
 
-BRAND_NAME = "NEXUS.AI"
+BRAND_NAME = "PROJECT WAR ROOM"
 TAGLINE = "High-Agency Software Synthesis"
-AUTHOR = "NEXUS CORE"
+AUTHOR = "PROJECT WAR ROOM"
 AUTHOR_LINKEDIN = "#"
 LOGO_PATH = "workspace/orbita_logo_cropped.png"
 

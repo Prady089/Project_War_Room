@@ -1,7 +1,7 @@
-# NEXUS.AI: High-Agency Software Synthesis Factory
+# Project War Room: High-Agency Software Synthesis Factory
 
-![NEXUS.AI Architecture]
-NEXUS.AI is a state-of-the-art, multi-agent AI framework designed to bridge the gap between human requirements and production-ready software. By orchestrating a fleet of specialized neural agents, NEXUS.AI automates the entire Software Development Life Cycle (SDLC) in real-time.
+![Project War Room Architecture]
+Project War Room is a state-of-the-art, multi-agent AI framework designed to bridge the gap between human requirements and production-ready software. By orchestrating a fleet of specialized neural agents, Project War Room automates the entire Software Development Life Cycle (SDLC) in real-time.
 
 
 In this example, Agents are asked to create simple calcaulator web application.
@@ -12,7 +12,7 @@ Conversation / work handoff between agent
 USER INTENT
 Create a calculator web application
 
-NEXUS FACTORY
+PROJECT WAR ROOM
 📁 Project workspace created: workspace/Create_a_calculator_web_application/
 
 BUSINESS ANALYST
@@ -100,7 +100,7 @@ Preview ready in the right panel.
 
 
 ## 🌌 The Vision
-Unlike traditional LLM wrappers, **NEXUS.AI** operates as a high-agency "factory." It doesn't just answer questions; it **synthesizes artifacts**. From requirements gathering to architectural design and final QA auditing, every step is handled by a specialized agent working in a synchronized neural loop.
+Unlike traditional LLM wrappers, **Project War Room** operates as a high-agency "factory." It doesn't just answer questions; it **synthesizes artifacts**. From requirements gathering to architectural design and final QA auditing, every step is handled by a specialized agent working in a synchronized neural loop.
 
 ## 🤖 The Neural Fleet
 The interface features a proprietary "Zig-Zag" formation that represents the logical flow of a professional software agency:
@@ -123,7 +123,7 @@ The interface features a proprietary "Zig-Zag" formation that represents the log
 ## 🛠 Technical Architecture
 *   **Model**: Powered by **Google Gemini 2.0 Flash** (Model of choice for speed and high-context reasoning).
 *   **Backend**: A high-performance **FastAPI** hub managing synchronized event streams.
-*   **UI/UX**: **Gradio** for logic orchestration combined with a custom **Tailwind CSS** frontend for the "Nexus" aesthetic.
+*   **UI/UX**: **Gradio** for logic orchestration combined with a custom **Tailwind CSS** frontend for a futuristic aesthetic.
 *   **Design System**: Utilizes **Orbitron**, **Outfit**, and **Fira Code** for a futuristic, developer-focused experience.
 
 ## ⚡ Setup & Execution
@@ -135,8 +135,8 @@ The interface features a proprietary "Zig-Zag" formation that represents the log
 ### Installation
 1. Clone the repository:
    ```bash
-   git clone https://github.com/Prady089/Nexus.AI_Agnetic-AI-Application.git
-   cd ORBITA
+   git clone https://github.com/Prady089/Project_War_Room.git
+   cd Project_War_Room
    ```
 2. Install dependencies:
    ```bash
@@ -155,7 +155,7 @@ The system requires two processes:
     python app.py
     ```
 3.  **Access the Hub**:
-    *   **NEXUS Production Hub**: `http://localhost:8003`
+    *   **Project War Room Hub**: `http://localhost:8003`
     *   **Internal Synthesis Engine**: `http://127.0.0.1:7860`
 
 ## 👨‍💻 Author
@@ -163,4 +163,4 @@ The system requires two processes:
 [LinkedIn Profile](https://www.linkedin.com/in/prady089/)
 
 ---
-*NEXUS.AI - Orchestrating the future of agentic development.*
+*Project War Room - Orchestrating the future of agentic development.*

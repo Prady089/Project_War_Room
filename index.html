@@ -168,11 +168,11 @@
                     </button>
                     <button id="tabButton_test-scripts" onclick="switchWorkspaceTab(this, 'test-scripts')" class="w-full flex items-center gap-3 px-4 py-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-50 text-xs transition-all workspace-tab">
                         <span class="material-symbols-outlined text-base">integration_instructions</span>
-                        Change Log
+                        Test Scripts
                     </button>
-                    <button class="w-full flex items-center gap-3 px-4 py-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-50 text-xs transition-all workspace-tab">
-                        <span class="material-symbols-outlined text-base">analytics</span>
-                        Reporting
+                    <button id="tabButton_changelog" onclick="switchWorkspaceTab(this, 'changelog')" class="w-full flex items-center gap-3 px-4 py-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-50 text-xs transition-all workspace-tab">
+                        <span class="material-symbols-outlined text-base">history</span>
+                        Change Log
                     </button>
                 </div>
             </div>
@@ -796,16 +796,18 @@
                 label = "DASHBOARD";
                 desc = "Project health at a glance - work breakdown, Jira sync, and test coverage";
                 htmlContent = `
-                    <div id="dashboardKpiRow" class="grid grid-cols-3 md:grid-cols-6 gap-3">
-                        <div class="col-span-6 text-center py-6 text-[10px] text-slate-400">Loading dashboard...</div>
+                    <div id="dashboardKpiRow" class="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3">
+                        <div class="col-span-full text-center py-6 text-[10px] text-slate-400">Loading dashboard...</div>
                     </div>
                     <div id="dashboardCharts" class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4"></div>
                 `;
             } else if (tabName === 'jira-stories') {
                 icon = "view_kanban";
                 label = "JIRA SYNC";
-                desc = "Review the generated work breakdown and push it to Jira";
+                desc = "Ask AI or add items manually, then push what's ready to Jira";
                 const workItems = window.workItems || [];
+                const flatItems = flattenWorkItems(workItems, []);
+                const draftCount = flatItems.filter(n => !n.jira_key).length;
 
                 const jiraSyncPaneHtml = `
                     <div class="w-[420px] shrink-0 space-y-2 sticky top-0">
@@ -828,61 +830,63 @@
                     </div>
                 `;
 
-                if (workItems.length > 0) {
-                    const flatItems = flattenWorkItems(workItems, []);
-                    const draftForest = buildFilteredForest(flatItems, n => !n.jira_key);
-                    const syncedForest = buildFilteredForest(flatItems, n => !!n.jira_key);
-                    const draftCount = flattenWorkItems(draftForest, []).length;
-                    const syncedCount = flattenWorkItems(syncedForest, []).length;
+                const listHtml = flatItems.length > 0
+                    ? renderFlatWorkItemList(workItems)
+                    : `<div class="text-center py-10 text-[11px] text-slate-400">No work items yet. Ask AI above, add one manually, or generate a breakdown from the War Room chat.</div>`;
 
-                    const draftHtml = draftForest.length > 0
-                        ? renderDraftWorkItemTree(draftForest, 0)
-                        : `<div class="text-center py-6 text-[10px] text-slate-400">Everything generated so far has been pushed to Jira. Ask the team for more in the War Room to add new drafts.</div>`;
-                    const syncedHtml = syncedForest.length > 0
-                        ? renderSyncedWorkItemTree(syncedForest, 0)
-                        : `<div class="text-center py-6 text-[10px] text-slate-400">Nothing pushed to Jira yet - select drafts above and push.</div>`;
-
-                    htmlContent = `
-                        <div class="flex gap-6 items-start">
-                            <div class="flex-1 min-w-0 space-y-4">
-                                <div class="space-y-2">
-                                    <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
-                                        <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Draft <span class="text-slate-300 font-normal">·</span> ${draftCount}
-                                    </div>
-                                    <div id="workItemTreeContainer" class="space-y-0.5 max-h-[360px] overflow-y-auto no-scrollbar border border-slate-200 rounded-xl p-2 bg-white">
-                                        ${draftHtml}
-                                    </div>
-                                    <div class="flex justify-end pt-1">
-                                        <button id="pushWorkItemsBtn" onclick="pushSelectedWorkItems(this)" class="px-5 py-2.5 rounded-xl bg-slate-900 text-white text-[10px] font-black uppercase tracking-wider hover:bg-slate-800 transition-all flex items-center gap-2">
-                                            Push Selected to Jira
-                                            <span class="material-symbols-outlined text-xs">sync</span>
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <button onclick="toggleSyncedSection()" class="w-full flex items-center justify-between pt-3 border-t border-slate-200">
-                                    <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
-                                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Synced to Jira <span class="text-slate-300 font-normal">·</span> ${syncedCount}
-                                    </div>
-                                    <span class="material-symbols-outlined text-slate-400 text-sm" id="syncedSectionChevron">chevron_right</span>
+                htmlContent = `
+                    <div class="flex gap-6 items-start">
+                        <div class="flex-1 min-w-0 space-y-3">
+                            <div class="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200 focus-within:border-slate-400 transition-colors">
+                                <span class="material-symbols-outlined text-slate-400 text-base shrink-0">auto_awesome</span>
+                                <input id="quickCreateInput" placeholder="Ask AI to add a story or task... e.g. &quot;Create a story for forgot password under EP002&quot;" class="flex-1 min-w-0 bg-transparent text-xs text-slate-800 placeholder-slate-400 outline-none" onkeydown="if(event.key==='Enter') quickCreateWorkItems(document.getElementById('quickCreateBtn'))">
+                                <button id="quickCreateBtn" onclick="quickCreateWorkItems(this)" class="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-[10px] font-black uppercase tracking-wider hover:bg-slate-800 transition-all shrink-0 flex items-center gap-1">
+                                    Ask AI <span class="material-symbols-outlined text-xs">send</span>
                                 </button>
-                                <div id="syncedSectionContainer" class="space-y-0.5 max-h-[360px] overflow-y-auto no-scrollbar border border-slate-200 rounded-xl p-2 bg-slate-50" style="display:none">
-                                    ${syncedHtml}
+                            </div>
+                            <div id="quickCreateStatus" class="text-[10px] px-1 empty:hidden"></div>
+
+                            <div id="workItemTreeContainer" class="max-h-[440px] overflow-y-auto no-scrollbar border border-slate-200 rounded-xl bg-white">
+                                ${listHtml}
+                            </div>
+
+                            <div id="manualAddForm" class="hidden p-3 border border-slate-200 rounded-xl bg-slate-50 space-y-2">
+                                <div class="grid grid-cols-2 gap-2">
+                                    <select id="manualAddType" onchange="updateManualAddParentOptions()" class="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white">
+                                        <option value="Epic">Epic</option>
+                                        <option value="Story">Story</option>
+                                        <option value="Task">Task</option>
+                                        <option value="Subtask">Subtask</option>
+                                    </select>
+                                    <select id="manualAddParent" class="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white"></select>
+                                </div>
+                                <input id="manualAddSummary" placeholder="Summary" class="w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-slate-400">
+                                <div class="grid grid-cols-[1fr_auto] gap-2">
+                                    <select id="manualAddPriority" class="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white">
+                                        <option>High</option><option selected>Medium</option><option>Low</option>
+                                    </select>
+                                    <button onclick="submitManualAdd(this)" class="px-4 py-1.5 rounded-lg bg-slate-900 text-white text-[10px] font-black uppercase tracking-wider hover:bg-slate-800 transition-all">Add Item</button>
                                 </div>
                             </div>
-                            ${jiraSyncPaneHtml}
-                        </div>
-                    `;
-                } else {
-                    htmlContent = `
-                        <div class="flex gap-6 items-start">
-                            <div class="flex-1 min-w-0 text-center py-10 text-[11px] text-slate-400">
-                                No work breakdown generated yet. Finalize requirements in the War Room chat first.
+
+                            <div class="flex items-center justify-between pt-1">
+                                <button onclick="toggleManualAddForm()" class="px-3 py-2.5 rounded-xl border border-dashed border-slate-300 text-slate-500 text-[10px] font-bold uppercase tracking-wider hover:border-slate-400 hover:text-slate-700 transition-all flex items-center gap-1">
+                                    <span class="material-symbols-outlined text-xs">add</span> Create Item
+                                </button>
+                                <div class="flex items-center gap-2">
+                                    <button onclick="updateArtifactsFromJira(this)" class="px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-black uppercase tracking-wider hover:bg-emerald-100 transition-all flex items-center gap-1.5" title="Re-reads the live Jira backlog and updates the BRD/FRS/Use Cases/Test Scripts artifacts to match, including stories added straight here">
+                                        Update Artifacts <span class="material-symbols-outlined text-xs">sync</span>
+                                    </button>
+                                    <button id="pushWorkItemsBtn" onclick="pushSelectedWorkItems(this)" class="px-5 py-2.5 rounded-xl bg-slate-900 text-white text-[10px] font-black uppercase tracking-wider hover:bg-slate-800 transition-all flex items-center gap-2">
+                                        Push Selected to Jira <span class="text-slate-400 font-normal normal-case">(${draftCount} draft${draftCount === 1 ? '' : 's'})</span>
+                                        <span class="material-symbols-outlined text-xs">sync</span>
+                                    </button>
+                                </div>
                             </div>
-                            ${jiraSyncPaneHtml}
                         </div>
-                    `;
-                }
+                        ${jiraSyncPaneHtml}
+                    </div>
+                `;
             } else if (tabName === 'rtm') {
                 icon = "rule";
                 label = "RTM / TRACE MATRIX";
@@ -897,6 +901,60 @@
                         </div>
                         <div id="rtmTableContainer" class="border border-slate-200 rounded-xl overflow-x-auto">
                             <div class="text-[10px] text-slate-400 text-center py-8">Loading trace matrix...</div>
+                        </div>
+                    </div>
+                `;
+            } else if (tabName === 'changelog') {
+                icon = "history";
+                label = "CHANGE LOG";
+                desc = "Change request register - scope changes during the build and post go-live amendments";
+                const flatForCr = flattenWorkItems(window.workItems || [], []);
+                const crParentOptions = flatForCr.filter(n => n.issuetype === 'Epic' || n.issuetype === 'Story' || n.issuetype === 'Task')
+                    .map(n => `<option value="${n.code}">${n.code} - ${escapeHtml(n.summary)}</option>`).join('');
+
+                htmlContent = `
+                    <div class="space-y-4">
+                        <div class="flex items-center justify-between">
+                            <div id="crSummaryStats" class="flex items-center gap-4 text-[10px] text-slate-400">Loading...</div>
+                            <div class="flex items-center gap-2">
+                                <button onclick="toggleCrForm()" class="px-3 py-2 rounded-xl border border-dashed border-slate-300 text-slate-500 text-[10px] font-bold uppercase tracking-wider hover:border-slate-400 hover:text-slate-700 transition-all flex items-center gap-1">
+                                    <span class="material-symbols-outlined text-xs">add</span> Log Change
+                                </button>
+                                <button onclick="loadChangeLog()" class="text-slate-400 hover:text-slate-700 transition-colors" title="Refresh">
+                                    <span class="material-symbols-outlined text-sm">refresh</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div id="crForm" class="hidden p-3 border border-slate-200 rounded-xl bg-slate-50 space-y-2">
+                            <input id="crTitle" placeholder="Title, e.g. \"Add early-withdrawal penalty waiver for Fixed+ product\"" class="w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-slate-400">
+                            <div class="grid grid-cols-3 gap-2">
+                                <select id="crType" class="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white">
+                                    <option>Scope Change</option><option>Enhancement</option><option>Defect Fix</option><option>Compliance</option>
+                                </select>
+                                <select id="crStage" class="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white">
+                                    <option value="During Build">During Build</option><option value="Post Go-Live">Post Go-Live</option>
+                                </select>
+                                <select id="crPriority" class="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white">
+                                    <option>High</option><option selected>Medium</option><option>Low</option>
+                                </select>
+                            </div>
+                            <textarea id="crDescription" placeholder="Description - what's changing and why" rows="2" class="w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-slate-400"></textarea>
+                            <textarea id="crImpact" placeholder="Impact summary - scope/cost/schedule/risk" rows="2" class="w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-slate-400"></textarea>
+                            <div class="grid grid-cols-2 gap-2">
+                                <select id="crWorkItem" class="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white">
+                                    <option value="">No linked requirement</option>
+                                    ${crParentOptions}
+                                </select>
+                                <input id="crRaisedBy" placeholder="Raised by" class="w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-slate-400">
+                            </div>
+                            <div class="flex justify-end">
+                                <button onclick="submitChangeRequest(this)" class="px-4 py-1.5 rounded-lg bg-slate-900 text-white text-[10px] font-black uppercase tracking-wider hover:bg-slate-800 transition-all">Log Change Request</button>
+                            </div>
+                        </div>
+
+                        <div id="crTableContainer" class="border border-slate-200 rounded-xl overflow-x-auto">
+                            <div class="text-[10px] text-slate-400 text-center py-8">Loading change log...</div>
                         </div>
                     </div>
                 `;
@@ -922,6 +980,36 @@
                 label = "ARTIFACTS";
                 desc = "Download specifications and view interactive process diagrams";
                 const files = window.vaultFiles || [];
+                const pid = activeProject ? encodeURIComponent(activeProject.id) : '';
+                const reportRow = (reportIcon, reportKey, title, sub, url) => `
+                    <div class="p-3 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between gap-3">
+                        <div class="flex items-center gap-2 min-w-0">
+                            <span class="material-symbols-outlined text-slate-400 text-base shrink-0">${reportIcon}</span>
+                            <div class="min-w-0">
+                                <div class="text-xs font-semibold text-slate-800">${title}</div>
+                                <div class="text-[10px] text-slate-400 truncate">${sub}</div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2 shrink-0">
+                            <button onclick="syncReportToConfluence('${reportKey}', this)" class="px-3 py-1 rounded bg-indigo-50 border border-indigo-200 text-indigo-700 text-[9px] font-bold uppercase tracking-wider hover:bg-indigo-100 transition-all flex items-center gap-1" title="Create or update this report as a Confluence page">
+                                Sync to Confluence <span class="material-symbols-outlined text-[10px]">description</span>
+                            </button>
+                            <a href="${url}" class="px-3 py-1 rounded bg-slate-900 text-white text-[9px] font-bold uppercase tracking-wider hover:bg-slate-800 transition-all flex items-center gap-1">
+                                CSV <span class="material-symbols-outlined text-[10px]">download</span>
+                            </a>
+                        </div>
+                    </div>
+                `;
+                const reportsSectionHtml = `
+                    <div class="space-y-2">
+                        <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Reports</div>
+                        <div class="grid grid-cols-1 gap-2">
+                            ${reportRow('view_kanban', 'jira_tasks', 'Live Jira Tasks', "Every issue currently in this project's Jira board", `/reports/jira_tasks.csv?project_id=${pid}`)}
+                            ${reportRow('rule', 'rtm', 'RTM / Trace Matrix', 'Requirement -> test case coverage, with live Jira status', `/reports/rtm.csv?project_id=${pid}`)}
+                            ${reportRow('history', 'change_log', 'Change Log', 'Every change request logged for this project', `/reports/change_log.csv?project_id=${pid}`)}
+                        </div>
+                    </div>
+                `;
                 const confluencePaneHtml = `
                     <div class="w-72 shrink-0 space-y-3 sticky top-0">
                         <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Confluence Sync</div>
@@ -980,15 +1068,29 @@
                                 <span class="material-symbols-outlined text-amber-600 text-sm">dashboard</span>
                                 <span class="text-xs font-semibold text-slate-800">${f.name}</span>
                             </div>
-                            <a href="${f.url}" target="_blank" class="px-3 py-1 rounded bg-amber-600 text-white text-[9px] font-bold uppercase tracking-wider hover:bg-amber-700 transition-all flex items-center gap-1">
-                                Open Board <span class="material-symbols-outlined text-[10px]">open_in_new</span>
-                            </a>
+                            <div class="flex items-center gap-2">
+                                <button onclick="publishMiroLinkToConfluence('${f.url}', '${escapeHtml(f.name).replace(/'/g, "\\'")}', this)" class="px-3 py-1 rounded bg-indigo-50 border border-indigo-200 text-indigo-700 text-[9px] font-bold uppercase tracking-wider hover:bg-indigo-100 transition-all flex items-center gap-1" title="Create a Confluence page linking to this board">
+                                    Save to Confluence <span class="material-symbols-outlined text-[10px]">description</span>
+                                </button>
+                                <a href="${f.url}" target="_blank" class="px-3 py-1 rounded bg-amber-600 text-white text-[9px] font-bold uppercase tracking-wider hover:bg-amber-700 transition-all flex items-center gap-1">
+                                    Open Board <span class="material-symbols-outlined text-[10px]">open_in_new</span>
+                                </a>
+                            </div>
                         </div>
                     `).join('');
 
                     htmlContent = `
                         <div class="flex gap-6 items-start">
                             <div class="flex-1 min-w-0 space-y-4">
+                                <div class="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200 focus-within:border-slate-400 transition-colors">
+                                    <span class="material-symbols-outlined text-slate-400 text-base shrink-0">auto_awesome</span>
+                                    <input id="artifactAskAiInput" placeholder="Ask AI to create or update a document... e.g. &quot;Update the BRD to include fraud detection requirements&quot;" class="flex-1 min-w-0 bg-transparent text-xs text-slate-800 placeholder-slate-400 outline-none" onkeydown="if(event.key==='Enter') artifactAskAi(document.getElementById('artifactAskAiBtn'))">
+                                    <button id="artifactAskAiBtn" onclick="artifactAskAi(this)" class="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-[10px] font-black uppercase tracking-wider hover:bg-slate-800 transition-all shrink-0 flex items-center gap-1">
+                                        Ask AI <span class="material-symbols-outlined text-xs">send</span>
+                                    </button>
+                                </div>
+                                <div id="artifactAskAiStatus" class="text-[10px] px-1 empty:hidden"></div>
+
                                 <div class="space-y-2">
                                     <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Specifications Vault</div>
                                     <div class="grid grid-cols-1 gap-2">${specLinksHtml}</div>
@@ -1001,14 +1103,7 @@
                                 </div>
                                 ` : ''}
 
-                                <div class="mt-6 border-t border-slate-200 pt-6 flex gap-3">
-                                    <button onclick="publishToConfluence(this)" class="px-4 py-2.5 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-700 text-[10px] font-black uppercase tracking-wider hover:bg-indigo-100 transition-all flex items-center gap-1.5 shadow-sm">
-                                        Publish BRD to Confluence <span class="material-symbols-outlined text-xs">description</span>
-                                    </button>
-                                    <button onclick="syncToMiroBoard(this)" class="px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-black uppercase tracking-wider hover:bg-amber-100 transition-all flex items-center gap-1.5 shadow-sm">
-                                        Sync User Stories to Miro <span class="material-symbols-outlined text-xs">dashboard</span>
-                                    </button>
-                                </div>
+                                <div class="mt-4">${reportsSectionHtml}</div>
                             </div>
 
                             ${confluencePaneHtml}
@@ -1017,12 +1112,15 @@
                 } else {
                     htmlContent = `
                         <div class="flex gap-6 items-start">
-                            <div class="flex-1 min-w-0 text-center py-10 space-y-4">
-                                <div class="text-[11px] text-slate-400">No artifacts generated yet. Please finalize your requirements in the War Room chat first.</div>
-                                <div class="text-[10px] text-slate-400">Already generated documents in an earlier session? Reload them from disk:</div>
-                                <button onclick="recoverArtifactsFromWorkspace(this)" class="px-4 py-2 rounded-xl bg-slate-100 border border-slate-200 text-slate-600 text-[10px] font-black uppercase tracking-wider hover:bg-slate-200 transition-all inline-flex items-center gap-1.5">
-                                    Recover from Workspace Folder <span class="material-symbols-outlined text-xs">restore</span>
-                                </button>
+                            <div class="flex-1 min-w-0 space-y-6">
+                                <div class="text-center py-10 space-y-4">
+                                    <div class="text-[11px] text-slate-400">No artifacts generated yet. Please finalize your requirements in the War Room chat first.</div>
+                                    <div class="text-[10px] text-slate-400">Already generated documents in an earlier session? Reload them from disk:</div>
+                                    <button onclick="recoverArtifactsFromWorkspace(this)" class="px-4 py-2 rounded-xl bg-slate-100 border border-slate-200 text-slate-600 text-[10px] font-black uppercase tracking-wider hover:bg-slate-200 transition-all inline-flex items-center gap-1.5">
+                                        Recover from Workspace Folder <span class="material-symbols-outlined text-xs">restore</span>
+                                    </button>
+                                </div>
+                                ${reportsSectionHtml}
                             </div>
 
                             ${confluencePaneHtml}
@@ -1047,6 +1145,9 @@
             }
             if (tabName === 'rtm') {
                 loadRtmMatrix();
+            }
+            if (tabName === 'changelog') {
+                loadChangeLog();
             }
             if (tabName === 'vault') {
                 renderConfluenceSyncedList();
@@ -1337,6 +1438,10 @@
 
                     // Automatically switch the active workspace view to the "Artifacts" tab
                     switchWorkspaceTab(null, 'vault');
+
+                    if (data.generation_errors && data.generation_errors.length > 0) {
+                        alert(`Some documents failed to generate and were left untouched (the AI service returned an error, likely a rate/quota limit): ${data.generation_errors.join(', ')}. You can retry them from the Artifacts tab once the issue clears.`);
+                    }
                 }
             } catch(e) {
                 const indicator = document.getElementById('genIndicator');
@@ -1364,112 +1469,47 @@
             return acc;
         }
 
-        // Splits the full work item tree into two independent forests - Draft
-        // (jira_key IS NULL) and Synced (jira_key set) - so the two never
-        // render mixed together. A node whose real parent didn't make it into
-        // this forest (e.g. a new draft Subtask added under an already-synced
-        // Story) surfaces at top level here with `_parentHint` set to that
-        // real parent, so context isn't lost even though it can't nest there.
-        function buildFilteredForest(flatItems, predicate) {
-            const included = flatItems.filter(predicate);
-            const includedIds = new Set(included.map(n => n.id));
-            const byId = {};
-            included.forEach(n => { byId[n.id] = { ...n, children: [] }; });
-            const roots = [];
-            included.forEach(n => {
-                const parentId = n.parent_id;
-                if (parentId && includedIds.has(parentId)) {
-                    byId[parentId].children.push(byId[n.id]);
-                } else {
-                    if (parentId) {
-                        const realParent = flatItems.find(x => x.id === parentId);
-                        if (realParent) byId[n.id]._parentHint = realParent;
-                    }
-                    roots.push(byId[n.id]);
-                }
-            });
-            return roots;
-        }
+        // One color per top-level root (Epic, or a standalone Story/Task with
+        // no Epic) - every descendant inherits its root's color, so you can
+        // tell which family a row belongs to at a glance without indentation.
+        const EPIC_COLOR_PALETTE = ['border-l-purple-400', 'border-l-blue-400', 'border-l-teal-400', 'border-l-amber-400', 'border-l-rose-400', 'border-l-violet-400', 'border-l-cyan-400', 'border-l-lime-500'];
 
-        function renderDraftWorkItemTree(items, depth) {
-            return items.map(node => {
-                const hasChildren = node.children && node.children.length > 0;
+        function renderFlatWorkItemList(rootNodes) {
+            const colorByNodeId = {};
+            function markColor(node, color) {
+                colorByNodeId[node.id] = color;
+                (node.children || []).forEach(c => markColor(c, color));
+            }
+            rootNodes.forEach((root, idx) => markColor(root, EPIC_COLOR_PALETTE[idx % EPIC_COLOR_PALETTE.length]));
+
+            return flattenWorkItems(rootNodes, []).map(node => {
                 const style = workItemTypeStyle(node.issuetype);
-                const hint = node._parentHint;
+                const isDraft = !node.jira_key;
+                const rootColor = colorByNodeId[node.id] || 'border-l-slate-300';
                 return `
-                    <div class="work-item-node" data-id="${node.id}">
-                        ${hint ? `
-                        <div class="flex items-center gap-1 text-[9px] text-slate-400 italic" style="padding-left: ${8 + depth * 20 + 22}px">
-                            <span class="material-symbols-outlined text-[11px]">subdirectory_arrow_right</span>
-                            under <a href="#" onclick="event.preventDefault(); openJiraIssue('${hint.jira_key}')" class="font-bold text-emerald-600 hover:underline not-italic">${hint.jira_key}</a> · ${escapeHtml(hint.summary)}
-                        </div>` : ''}
-                        <div class="flex items-center gap-2 py-1.5 px-2 rounded-lg hover:bg-slate-50 transition-colors" style="padding-left: ${8 + depth * 20}px">
-                            ${hasChildren
-                                ? `<button onclick="toggleWorkItemNode(${node.id})" class="w-4 h-4 flex items-center justify-center text-slate-400 hover:text-slate-700 shrink-0">
-                                       <span class="material-symbols-outlined text-sm" id="wi-chevron-${node.id}">expand_more</span>
-                                   </button>`
-                                : `<span class="w-4 shrink-0"></span>`}
-                            <input type="checkbox" data-wi-checkbox data-id="${node.id}" onclick="handleWorkItemCheckbox(${node.id}, this.checked)" class="rounded border-slate-300 text-slate-900 focus:ring-slate-500 bg-white shrink-0">
-                            <span class="material-symbols-outlined ${style.color} text-sm shrink-0">${style.icon}</span>
-                            <span class="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded ${style.bg} ${style.color} shrink-0">${node.issuetype}</span>
-                            ${node.code ? `<span class="text-[9px] font-mono font-bold text-slate-400 shrink-0" title="Trace Matrix code">${node.code}</span>` : ''}
-                            <span class="text-xs text-slate-800 flex-1 truncate" title="${escapeHtml(node.summary)}">${escapeHtml(node.summary)}</span>
-                            <span class="text-[8px] font-bold text-slate-400 uppercase shrink-0">${escapeHtml(node.priority || '')}</span>
-                            <button onclick="event.stopPropagation(); deleteWorkItem(${node.id}, '${escapeHtml(node.summary).replace(/'/g, "\\'")}')" class="w-5 h-5 rounded flex items-center justify-center text-rose-400 hover:text-rose-600 hover:bg-rose-50 transition-all shrink-0" title="Delete">
-                                <span class="material-symbols-outlined text-[13px]">delete</span>
-                            </button>
-                        </div>
-                        ${hasChildren ? `<div id="wi-children-${node.id}" class="work-item-children">${renderDraftWorkItemTree(node.children, depth + 1)}</div>` : ''}
+                    <div class="flex items-center gap-2 py-1.5 px-2.5 border-b border-slate-100 hover:bg-slate-50 transition-colors border-l-[3px] ${rootColor}" data-id="${node.id}">
+                        ${isDraft
+                            ? `<input type="checkbox" data-wi-checkbox data-id="${node.id}" onclick="handleWorkItemCheckbox(${node.id}, this.checked)" class="rounded border-slate-300 text-slate-900 focus:ring-slate-500 bg-white shrink-0">`
+                            : `<span class="w-3.5 shrink-0"></span>`}
+                        <span class="material-symbols-outlined ${style.color} text-sm shrink-0">${style.icon}</span>
+                        <span class="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded ${style.bg} ${style.color} shrink-0">${node.issuetype}</span>
+                        ${node.code ? `<span class="text-[9px] font-mono font-bold text-slate-400 shrink-0" title="Trace Matrix code">${node.code}</span>` : ''}
+                        <span class="text-xs text-slate-800 flex-1 truncate" title="${escapeHtml(node.summary)}">${escapeHtml(node.summary)}</span>
+                        <span class="text-[8px] font-bold text-slate-400 uppercase shrink-0 w-12 text-right">${escapeHtml(node.priority || '')}</span>
+                        ${isDraft
+                            ? `<span class="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 border border-amber-200 shrink-0">Draft</span>`
+                            : `<a href="#" onclick="event.stopPropagation(); openJiraIssue('${node.jira_key}'); return false;" class="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-600 border border-emerald-200 shrink-0 hover:underline" title="Live in Jira - ${node.jira_key}">Live &middot; ${node.jira_key}</a>`}
+                        ${(node.issuetype === 'Story' || node.issuetype === 'Task')
+                            ? `<button onclick="event.stopPropagation(); generateTestCasesForItem(${node.id}, this)" class="w-5 h-5 rounded flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-all shrink-0" title="Generate test cases">
+                                   <span class="material-symbols-outlined text-[13px]">fact_check</span>
+                               </button>`
+                            : ''}
+                        <button onclick="event.stopPropagation(); deleteWorkItem(${node.id}, '${escapeHtml(node.summary).replace(/'/g, "\\'")}')" class="w-5 h-5 rounded flex items-center justify-center text-rose-400 hover:text-rose-600 hover:bg-rose-50 transition-all shrink-0" title="Delete">
+                            <span class="material-symbols-outlined text-[13px]">delete</span>
+                        </button>
                     </div>
                 `;
             }).join('');
-        }
-
-        function renderSyncedWorkItemTree(items, depth) {
-            return items.map(node => {
-                const hasChildren = node.children && node.children.length > 0;
-                const style = workItemTypeStyle(node.issuetype);
-                return `
-                    <div class="work-item-node" data-id="${node.id}">
-                        <div class="flex items-center gap-2 py-1.5 px-2 rounded-lg hover:bg-white transition-colors" style="padding-left: ${8 + depth * 20}px">
-                            ${hasChildren
-                                ? `<button onclick="toggleWorkItemNode(${node.id})" class="w-4 h-4 flex items-center justify-center text-slate-400 hover:text-slate-700 shrink-0">
-                                       <span class="material-symbols-outlined text-sm" id="wi-chevron-${node.id}">expand_more</span>
-                                   </button>`
-                                : `<span class="w-4 shrink-0"></span>`}
-                            <span class="material-symbols-outlined text-emerald-500 text-sm shrink-0" title="Synced to Jira">check_circle</span>
-                            <span class="material-symbols-outlined ${style.color} text-sm shrink-0">${style.icon}</span>
-                            <span class="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded ${style.bg} ${style.color} shrink-0">${node.issuetype}</span>
-                            ${node.code ? `<span class="text-[9px] font-mono font-bold text-slate-400 shrink-0" title="Trace Matrix code">${node.code}</span>` : ''}
-                            <span class="text-xs text-slate-700 flex-1 truncate" title="${escapeHtml(node.summary)}">${escapeHtml(node.summary)}</span>
-                            <span class="text-[8px] font-bold text-slate-400 uppercase shrink-0">${escapeHtml(node.priority || '')}</span>
-                            <a href="#" onclick="event.stopPropagation(); openJiraIssue('${node.jira_key}'); return false;" class="text-[9px] font-bold text-emerald-600 hover:underline shrink-0">${node.jira_key}</a>
-                            <button onclick="event.stopPropagation(); deleteWorkItem(${node.id}, '${escapeHtml(node.summary).replace(/'/g, "\\'")}')" class="w-5 h-5 rounded flex items-center justify-center text-rose-400 hover:text-rose-600 hover:bg-rose-50 transition-all shrink-0" title="Delete">
-                                <span class="material-symbols-outlined text-[13px]">delete</span>
-                            </button>
-                        </div>
-                        ${hasChildren ? `<div id="wi-children-${node.id}" class="work-item-children">${renderSyncedWorkItemTree(node.children, depth + 1)}</div>` : ''}
-                    </div>
-                `;
-            }).join('');
-        }
-
-        function toggleSyncedSection() {
-            const container = document.getElementById('syncedSectionContainer');
-            const chevron = document.getElementById('syncedSectionChevron');
-            if (!container) return;
-            const collapsed = container.style.display === 'none';
-            container.style.display = collapsed ? '' : 'none';
-            if (chevron) chevron.textContent = collapsed ? 'expand_more' : 'chevron_right';
-        }
-
-        function toggleWorkItemNode(id) {
-            const container = document.getElementById(`wi-children-${id}`);
-            const chevron = document.getElementById(`wi-chevron-${id}`);
-            if (!container) return;
-            const collapsed = container.style.display === 'none';
-            container.style.display = collapsed ? '' : 'none';
-            if (chevron) chevron.textContent = collapsed ? 'expand_more' : 'chevron_right';
         }
 
         function openJiraIssue(key) {
@@ -1477,10 +1517,65 @@
             if (base) window.open(`${base}/browse/${key}`, '_blank');
         }
 
+        async function generateTestCasesForItem(itemId, btn) {
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="material-symbols-outlined text-[13px] animate-spin">sync</span>';
+            try {
+                const response = await fetch(`/work_items/${itemId}/generate_test_cases`, { method: 'POST' });
+                const data = await response.json();
+                if (!data.success) {
+                    alert('Failed to generate test cases: ' + (data.error || 'Unknown error'));
+                    return;
+                }
+                const rtmContainer = document.getElementById('rtmTableContainer');
+                if (rtmContainer) loadRtmMatrix();
+                btn.innerHTML = '<span class="material-symbols-outlined text-[13px] text-emerald-500">check</span>';
+                setTimeout(() => { btn.innerHTML = originalHtml; }, 1500);
+            } catch (e) {
+                alert('Network error: ' + e.message);
+                btn.innerHTML = originalHtml;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function pushTestCaseToJira(testCaseId, btn) {
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="material-symbols-outlined text-[11px] animate-spin">sync</span>';
+            try {
+                const response = await fetch('/jira/push_test_cases', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ project_id: activeProject ? activeProject.id : null, test_case_ids: [testCaseId] })
+                });
+                const data = await response.json();
+                const result = data.results && data.results[0];
+                if (!data.success || !result || !result.success) {
+                    alert('Push failed: ' + ((result && result.error) || data.error || 'Unknown error'));
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml;
+                    return;
+                }
+                loadRtmMatrix();
+            } catch (e) {
+                alert('Network error: ' + e.message);
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            }
+        }
+
         function handleWorkItemCheckbox(id, checked) {
-            const container = document.getElementById(`wi-children-${id}`);
-            if (container) {
-                container.querySelectorAll('input[data-wi-checkbox]:not(:disabled)').forEach(cb => { cb.checked = checked; });
+            // The list is flat now (no nested DOM to cascade through), so
+            // selection cascades via the DATA model instead: find this
+            // node's real descendants and check/uncheck their boxes by id.
+            const node = findWorkItemNode(id);
+            if (node) {
+                flattenWorkItems(node.children || [], []).forEach(descendant => {
+                    const cb = document.querySelector(`input[data-wi-checkbox][data-id="${descendant.id}"]`);
+                    if (cb && !cb.disabled) cb.checked = checked;
+                });
             }
             refreshWorkItemAncestorStates();
         }
@@ -1607,6 +1702,107 @@
                     btn.disabled = false;
                     btn.innerHTML = originalHtml;
                 }
+            }
+        }
+
+        async function quickCreateWorkItems(btn) {
+            const input = document.getElementById('quickCreateInput');
+            const status = document.getElementById('quickCreateStatus');
+            const message = input ? input.value.trim() : '';
+            if (!message) return;
+            if (!activeProject) { alert('Open a project first.'); return; }
+
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = 'Thinking... <span class="material-symbols-outlined animate-spin text-xs">sync</span>';
+            if (status) status.textContent = '';
+
+            try {
+                const response = await fetch('/work_items/quick_create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ project_id: activeProject.id, message })
+                });
+                const data = await response.json();
+                if (!data.success) {
+                    if (status) status.innerHTML = `<span class="text-rose-500">${escapeHtml(data.error || 'Could not add that.')}</span>`;
+                    return;
+                }
+                input.value = '';
+                const addedCount = (data.created || []).length;
+                const skippedNote = (data.skipped || []).length > 0 ? ` (skipped: ${data.skipped.map(escapeHtml).join('; ')})` : '';
+                if (status) status.innerHTML = `<span class="text-emerald-600">Added ${addedCount} item${addedCount === 1 ? '' : 's'}.</span>${skippedNote}`;
+                await refreshWorkItemsFromServer();
+            } catch (e) {
+                if (status) status.innerHTML = `<span class="text-rose-500">Network error: ${escapeHtml(e.message)}</span>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            }
+        }
+
+        function toggleManualAddForm() {
+            const form = document.getElementById('manualAddForm');
+            if (!form) return;
+            const opening = form.classList.contains('hidden');
+            form.classList.toggle('hidden');
+            if (opening) updateManualAddParentOptions();
+        }
+
+        function updateManualAddParentOptions() {
+            const typeSelect = document.getElementById('manualAddType');
+            const parentSelect = document.getElementById('manualAddParent');
+            if (!typeSelect || !parentSelect) return;
+            const type = typeSelect.value;
+            const flat = flattenWorkItems(window.workItems || [], []);
+
+            let candidates = [];
+            let allowNone = true;
+            if (type === 'Epic') {
+                candidates = [];
+                allowNone = true;
+            } else if (type === 'Story' || type === 'Task') {
+                candidates = flat.filter(n => n.issuetype === 'Epic');
+                allowNone = true;
+            } else if (type === 'Subtask') {
+                candidates = flat.filter(n => n.issuetype === 'Story' || n.issuetype === 'Task');
+                allowNone = false;
+            }
+
+            const options = candidates.map(n => `<option value="${n.code}">${n.code} - ${escapeHtml(n.summary)}</option>`);
+            parentSelect.innerHTML = (allowNone ? '<option value="">No parent (top-level)</option>' : '') + options.join('');
+            parentSelect.disabled = !allowNone && candidates.length === 0;
+        }
+
+        async function submitManualAdd(btn) {
+            if (!activeProject) { alert('Open a project first.'); return; }
+            const issuetype = document.getElementById('manualAddType').value;
+            const parent_code = document.getElementById('manualAddParent').value || null;
+            const summary = document.getElementById('manualAddSummary').value.trim();
+            const priority = document.getElementById('manualAddPriority').value;
+            if (!summary) { alert('Please enter a summary.'); return; }
+            if (issuetype === 'Subtask' && !parent_code) { alert('A Subtask needs a parent Story or Task.'); return; }
+
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            try {
+                const response = await fetch('/work_items/manual_create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ project_id: activeProject.id, issuetype, summary, priority, parent_code })
+                });
+                const data = await response.json();
+                if (!data.success) {
+                    alert('Failed to add item: ' + (data.error || 'Unknown error'));
+                    return;
+                }
+                document.getElementById('manualAddSummary').value = '';
+                await refreshWorkItemsFromServer();
+            } catch (e) {
+                alert('Network error: ' + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
             }
         }
 
@@ -1871,7 +2067,15 @@
                             ${itemCell}
                             <td class="px-3 py-2 border-r border-slate-100">
                                 ${row.test_case_code
-                                    ? `<div class="text-[9px] font-mono font-bold text-slate-400">${escapeHtml(row.test_case_code)}</div><div class="text-[11px] text-slate-700">${escapeHtml(row.test_case_title || '')}</div>`
+                                    ? `<div class="text-[9px] font-mono font-bold text-slate-400">${escapeHtml(row.test_case_code)}</div>
+                                       <div class="text-[11px] text-slate-700">${escapeHtml(row.test_case_title || '')}</div>
+                                       <div class="mt-1">
+                                         ${row.test_case_jira_key
+                                            ? `<a href="#" onclick="event.preventDefault(); openJiraIssue('${row.test_case_jira_key}')" class="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-600 border border-emerald-200 hover:underline" title="Live in Jira - ${row.test_case_jira_key}">Live &middot; ${row.test_case_jira_key}</a>`
+                                            : (row.jira_key
+                                                ? `<button onclick="pushTestCaseToJira(${row.test_case_id}, this)" class="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 border border-amber-200 hover:bg-amber-100 transition-colors" title="Push this test case to Jira as a Subtask">Draft &middot; Push</button>`
+                                                : `<span class="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 border border-amber-200" title="Push the parent Story/Task to Jira first">Draft</span>`)}
+                                       </div>`
                                     : `<span class="text-[10px] text-slate-300 italic">No test case yet</span>`}
                             </td>
                             <td class="px-3 py-2 border-r border-slate-100 text-center">${row.test_case_code ? rtmTestStatusPill(row.test_case_status) : ''}</td>
@@ -1902,6 +2106,193 @@
                 `;
             } catch (e) {
                 container.innerHTML = `<div class="text-[10px] text-rose-500 text-center py-8">Network error loading trace matrix</div>`;
+            }
+        }
+
+        // ============================================================
+        // CHANGE LOG (Change Request Register)
+        // ============================================================
+
+        function crStagePill(stage) {
+            if (!stage) return `<span class="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 border border-slate-200">-</span>`;
+            const cls = stage === 'Post Go-Live' ? 'bg-rose-50 text-rose-600 border-rose-200' : 'bg-blue-50 text-blue-600 border-blue-200';
+            return `<span class="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded border ${cls}">${escapeHtml(stage)}</span>`;
+        }
+
+        function toggleCrForm() {
+            const form = document.getElementById('crForm');
+            if (form) form.classList.toggle('hidden');
+        }
+
+        async function loadChangeLog() {
+            const container = document.getElementById('crTableContainer');
+            const statsEl = document.getElementById('crSummaryStats');
+            if (!container) return;
+            container.innerHTML = `<div class="text-[10px] text-slate-400 text-center py-8">Loading change log...</div>`;
+            try {
+                const projectId = activeProject ? activeProject.id : '';
+                const r = await fetch(`/change_requests/${encodeURIComponent(projectId)}`);
+                const d = await r.json();
+                if (d.error) {
+                    container.innerHTML = `<div class="text-[10px] text-rose-500 text-center py-8">${escapeHtml(d.error)}</div>`;
+                    if (statsEl) statsEl.textContent = '';
+                    return;
+                }
+
+                const rows = d.change_requests || [];
+                window.changeRequests = rows;
+                if (statsEl) {
+                    const duringBuild = rows.filter(r => r.stage === 'During Build').length;
+                    const postLive = rows.filter(r => r.stage === 'Post Go-Live').length;
+                    statsEl.innerHTML = `
+                        <span><span class="font-bold text-slate-700">${rows.length}</span> Total</span>
+                        <span class="text-blue-600"><span class="font-bold">${duringBuild}</span> During Build</span>
+                        <span class="text-rose-500"><span class="font-bold">${postLive}</span> Post Go-Live</span>
+                    `;
+                }
+
+                if (rows.length === 0) {
+                    container.innerHTML = `<div class="text-[10px] text-slate-400 text-center py-8">No change requests logged yet. Click "Log Change" above to add one.</div>`;
+                    return;
+                }
+
+                const bodyHtml = rows.map(row => `
+                    <tr class="border-b border-slate-100 hover:bg-slate-50/60 transition-colors">
+                        <td class="px-3 py-2 border-r border-slate-100 align-top">
+                            <div class="text-[9px] font-mono font-bold text-slate-400">${escapeHtml(row.code || '')}</div>
+                            <div class="text-[11px] text-slate-800 font-medium">${escapeHtml(row.title)}</div>
+                            <div class="text-[9px] text-slate-400 mt-0.5">${escapeHtml(row.type || '')}</div>
+                        </td>
+                        <td class="px-3 py-2 border-r border-slate-100 align-top text-center">${crStagePill(row.stage)}</td>
+                        <td class="px-3 py-2 border-r border-slate-100 align-top text-center">
+                            <span class="text-[8px] font-bold text-slate-400 uppercase">${escapeHtml(row.priority || '')}</span>
+                        </td>
+                        <td class="px-3 py-2 border-r border-slate-100 align-top">
+                            <select onchange="updateCrStatus(${row.id}, this.value)" class="text-[9px] font-bold uppercase px-1.5 py-1 rounded border ${crStatusClass(row.status)} bg-white">
+                                ${['Proposed','Approved','Rejected','Deferred','Implemented'].map(s => `<option value="${s}" ${row.status === s ? 'selected' : ''}>${s}</option>`).join('')}
+                            </select>
+                        </td>
+                        <td class="px-3 py-2 border-r border-slate-100 align-top">
+                            ${row.work_item_code
+                                ? `<div class="text-[9px] font-mono font-bold text-slate-400">${escapeHtml(row.work_item_code)}</div><div class="text-[10px] text-slate-600">${escapeHtml(row.work_item_summary || '')}</div>`
+                                : `<span class="text-[10px] text-slate-300 italic">Unlinked</span>`}
+                        </td>
+                        <td class="px-3 py-2 border-r border-slate-100 align-top">
+                            <div class="text-[10px] text-slate-600">${escapeHtml(row.raised_by || '-')}</div>
+                            <div class="text-[9px] text-slate-400">${row.raised_at ? new Date(row.raised_at).toLocaleDateString() : ''}</div>
+                        </td>
+                        <td class="px-3 py-2 text-center align-top">
+                            <button onclick="deleteChangeRequestRow(${row.id})" class="w-5 h-5 rounded flex items-center justify-center text-rose-400 hover:text-rose-600 hover:bg-rose-50 transition-all" title="Delete">
+                                <span class="material-symbols-outlined text-[13px]">delete</span>
+                            </button>
+                        </td>
+                    </tr>
+                `).join('');
+
+                container.innerHTML = `
+                    <table class="w-full text-left border-collapse min-w-[900px]">
+                        <thead>
+                            <tr class="bg-slate-50 border-b border-slate-200 text-[9px] font-bold uppercase tracking-wider text-slate-500">
+                                <th class="px-3 py-2 border-r border-slate-100">Change Request</th>
+                                <th class="px-3 py-2 border-r border-slate-100 text-center">Stage</th>
+                                <th class="px-3 py-2 border-r border-slate-100 text-center">Priority</th>
+                                <th class="px-3 py-2 border-r border-slate-100">Status</th>
+                                <th class="px-3 py-2 border-r border-slate-100">Linked Requirement</th>
+                                <th class="px-3 py-2 border-r border-slate-100">Raised By / Date</th>
+                                <th class="px-3 py-2 text-center"></th>
+                            </tr>
+                        </thead>
+                        <tbody>${bodyHtml}</tbody>
+                    </table>
+                `;
+            } catch (e) {
+                container.innerHTML = `<div class="text-[10px] text-rose-500 text-center py-8">Network error loading change log</div>`;
+            }
+        }
+
+        function crStatusClass(status) {
+            if (status === 'Approved' || status === 'Implemented') return 'bg-emerald-50 text-emerald-600 border-emerald-200';
+            if (status === 'Rejected') return 'bg-rose-50 text-rose-600 border-rose-200';
+            if (status === 'Deferred') return 'bg-slate-100 text-slate-500 border-slate-200';
+            return 'bg-amber-50 text-amber-600 border-amber-200'; // Proposed
+        }
+
+        async function submitChangeRequest(btn) {
+            if (!activeProject) { alert('Open a project first.'); return; }
+            const title = document.getElementById('crTitle').value.trim();
+            if (!title) { alert('Please enter a title.'); return; }
+
+            const payload = {
+                project_id: activeProject.id,
+                title,
+                type: document.getElementById('crType').value,
+                stage: document.getElementById('crStage').value,
+                priority: document.getElementById('crPriority').value,
+                description: document.getElementById('crDescription').value.trim(),
+                impact_summary: document.getElementById('crImpact').value.trim(),
+                work_item_code: document.getElementById('crWorkItem').value || null,
+                raised_by: document.getElementById('crRaisedBy').value.trim(),
+            };
+
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            try {
+                const response = await fetch('/change_requests', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                if (!data.success) {
+                    alert('Failed to log change request: ' + (data.error || 'Unknown error'));
+                    return;
+                }
+                document.getElementById('crTitle').value = '';
+                document.getElementById('crDescription').value = '';
+                document.getElementById('crImpact').value = '';
+                document.getElementById('crRaisedBy').value = '';
+                toggleCrForm();
+                loadChangeLog();
+            } catch (e) {
+                alert('Network error: ' + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            }
+        }
+
+        async function updateCrStatus(id, status) {
+            const payload = { status };
+            if (status === 'Approved' || status === 'Rejected') {
+                const approver = prompt(`${status} by:`);
+                if (approver === null) { loadChangeLog(); return; } // cancelled - revert the select to its real value
+                payload.approved_by = approver;
+                payload.decision_at = new Date().toISOString();
+            }
+            try {
+                const response = await fetch(`/change_requests/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                if (!data.success) alert('Update failed: ' + (data.error || 'Unknown error'));
+            } catch (e) {
+                alert('Network error: ' + e.message);
+            } finally {
+                loadChangeLog();
+            }
+        }
+
+        async function deleteChangeRequestRow(id) {
+            if (!confirm('Delete this change request? This cannot be undone.')) return;
+            try {
+                const response = await fetch(`/change_requests/${id}`, { method: 'DELETE' });
+                const data = await response.json();
+                if (!data.success) { alert('Delete failed: ' + (data.error || 'Unknown error')); return; }
+                loadChangeLog();
+            } catch (e) {
+                alert('Network error: ' + e.message);
             }
         }
 
@@ -2023,6 +2414,17 @@
             'Not Run': { bg: 'bg-slate-300', text: 'text-slate-400' },
         };
         const TEST_STATUS_ICONS = { Pass: 'check_circle', Fail: 'cancel', 'Not Run': 'schedule' };
+        const CR_STAGE_COLORS = {
+            'During Build': { bg: 'bg-blue-500', text: 'text-blue-600' },
+            'Post Go-Live': { bg: 'bg-rose-500', text: 'text-rose-600' },
+        };
+        const CR_STATUS_COLORS = {
+            Proposed: { bg: 'bg-amber-500', text: 'text-amber-600' },
+            Approved: { bg: 'bg-emerald-500', text: 'text-emerald-600' },
+            Implemented: { bg: 'bg-emerald-600', text: 'text-emerald-700' },
+            Rejected: { bg: 'bg-rose-500', text: 'text-rose-600' },
+            Deferred: { bg: 'bg-slate-400', text: 'text-slate-500' },
+        };
 
         function jiraStatusColor(label) {
             const s = (label || '').toLowerCase();
@@ -2041,7 +2443,7 @@
                 const r = await fetch(`/dashboard/${encodeURIComponent(projectId)}`);
                 const d = await r.json();
                 if (d.error) {
-                    kpiRow.innerHTML = `<div class="col-span-6 text-center py-6 text-[10px] text-rose-500">${escapeHtml(d.error)}</div>`;
+                    kpiRow.innerHTML = `<div class="col-span-full text-center py-6 text-[10px] text-rose-500">${escapeHtml(d.error)}</div>`;
                     charts.innerHTML = '';
                     return;
                 }
@@ -2051,7 +2453,8 @@
                     kpiTile('checklist', 'Requirements', k.total_requirements, `${k.total_work_items} total work items`),
                     kpiTile('sync', 'Jira Sync Rate', `${k.sync_rate_pct}%`, `${k.jira_synced} of ${k.jira_total} synced`, k.sync_rate_pct, 'bg-blue-500'),
                     kpiTile('verified', 'Test Coverage', `${k.coverage_pct}%`, `${k.covered} of ${k.total_requirements} covered`, k.coverage_pct, 'bg-emerald-500'),
-                    kpiTile('folder_zip', 'Artifacts', k.artifacts_count, 'in the Vault'),
+                    kpiTile('fact_check', 'Test Pass Rate', k.test_executed ? `${k.test_pass_rate_pct}%` : '—', `${k.test_pass} pass / ${k.test_fail} fail / ${k.test_not_run} not run`, k.test_executed ? k.test_pass_rate_pct : undefined, 'bg-emerald-500'),
+                    kpiTile('history', 'Change Requests', k.cr_total, `${k.cr_during_build} during build · ${k.cr_post_live} post go-live`),
                     kpiTile('description', 'Confluence Synced', k.confluence_synced_count, 'pages published'),
                     kpiTile('view_kanban', 'Live in Jira', `${k.jira_open}/${k.jira_done}`, 'Open / Done'),
                 ].join('');
@@ -2060,16 +2463,20 @@
                 const priorityRows = (d.priority_distribution || []).map(x => ({ label: x.label, count: x.count }));
                 const testStatusRows = (d.test_case_status || []).map(x => ({ label: x.label, count: x.count }));
                 const jiraStatusRows = (d.jira_status_breakdown || []).map(x => ({ label: x.label, count: x.count }));
+                const crStageRows = (d.change_request_stage_breakdown || []).map(x => ({ label: x.label, count: x.count }));
+                const crStatusRows = (d.change_request_status_breakdown || []).map(x => ({ label: x.label, count: x.count }));
 
                 charts.innerHTML = [
                     stackedBarSection('Work Item Breakdown', workItemRows, l => ISSUETYPE_COLORS[l] || { bg: 'bg-slate-400' }),
                     barListSection('Priority Distribution', priorityRows, l => PRIORITY_COLORS[l] || { bg: 'bg-slate-300', text: 'text-slate-400' }),
                     barListSection('Test Case Status', testStatusRows, l => TEST_STATUS_COLORS[l] || { bg: 'bg-slate-300', text: 'text-slate-400' }, l => TEST_STATUS_ICONS[l] || 'help'),
                     barListSection('Live Jira Status', jiraStatusRows, jiraStatusColor),
+                    barListSection('Change Requests by Stage', crStageRows, l => CR_STAGE_COLORS[l] || { bg: 'bg-slate-300', text: 'text-slate-400' }),
+                    barListSection('Change Requests by Status', crStatusRows, l => CR_STATUS_COLORS[l] || { bg: 'bg-slate-300', text: 'text-slate-400' }),
                     epicProgressSection(d.epic_progress),
                 ].join('');
             } catch (e) {
-                kpiRow.innerHTML = `<div class="col-span-6 text-center py-6 text-[10px] text-rose-500">Network error loading dashboard</div>`;
+                kpiRow.innerHTML = `<div class="col-span-full text-center py-6 text-[10px] text-rose-500">Network error loading dashboard</div>`;
                 if (charts) charts.innerHTML = '';
             }
         }
@@ -2091,76 +2498,77 @@
             }
         }
 
-        // Confluence Publish Handler
-        async function publishToConfluence(btn) {
+        // Save a Miro board's link (not its content) as a Confluence page
+        async function syncReportToConfluence(report, btn) {
+            if (!activeProject) { alert('Open a project first.'); return; }
+            const originalHtml = btn.innerHTML;
             btn.disabled = true;
-            btn.innerHTML = 'Publishing... <span class="material-symbols-outlined animate-spin text-xs">sync</span>';
+            btn.innerHTML = 'Syncing... <span class="material-symbols-outlined animate-spin text-[10px]">sync</span>';
             try {
+                const response = await fetch('/reports/sync_to_confluence', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ project_id: activeProject.id, report })
+                });
+                const data = await response.json();
+                if (!data.success) {
+                    alert('Sync to Confluence failed: ' + (data.error || 'Unknown error'));
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml;
+                    return;
+                }
+                window.confluenceSynced = window.confluenceSynced || [];
+                window.confluenceSynced.unshift({ name: data.title, url: data.url });
+                renderConfluenceSyncedList();
+                btn.className = "px-3 py-1 rounded bg-emerald-50 border border-emerald-200 text-emerald-700 text-[9px] font-bold uppercase tracking-wider flex items-center gap-1";
+                btn.innerHTML = 'Synced <span class="material-symbols-outlined text-[10px]">check</span>';
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.className = "px-3 py-1 rounded bg-indigo-50 border border-indigo-200 text-indigo-700 text-[9px] font-bold uppercase tracking-wider hover:bg-indigo-100 transition-all flex items-center gap-1";
+                    btn.innerHTML = originalHtml;
+                }, 2000);
+            } catch (e) {
+                alert('Network error: ' + e.message);
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            }
+        }
+
+        async function publishMiroLinkToConfluence(boardUrl, boardName, btn) {
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = 'Saving... <span class="material-symbols-outlined animate-spin text-[10px]">sync</span>';
+            try {
+                const projectName = activeProject ? activeProject.name : "Project";
                 const response = await fetch('/confluence/publish', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        title: (activeProject ? activeProject.name : "Banking Deposit page") + " BRD",
+                        title: `${projectName} - ${boardName}`,
+                        content: `This board is maintained live in Miro. <a href="${boardUrl}">Open the live board in Miro &rarr;</a>`,
                         project_id: activeProject ? activeProject.id : null
                     })
                 });
                 const data = await response.json();
                 if (data.success) {
-                    btn.className = "px-4 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold uppercase tracking-wider";
-                    btn.innerHTML = 'Published to Confluence! <span class="material-symbols-outlined text-xs">check</span>';
-                    
-                    const statusDiv = document.getElementById('confluencePublishStatus') || document.createElement('div');
-                    statusDiv.id = 'confluencePublishStatus';
-                    statusDiv.className = "mt-3 text-xs text-slate-600";
-                    statusDiv.innerHTML = `Successfully published! <a href="${data.url}" target="_blank" class="text-blue-600 underline font-bold">Open Confluence Page</a>`;
-                    btn.parentNode.parentNode.appendChild(statusDiv);
+                    btn.className = "px-3 py-1 rounded bg-emerald-50 border border-emerald-200 text-emerald-700 text-[9px] font-bold uppercase tracking-wider flex items-center gap-1";
+                    btn.innerHTML = 'Saved <span class="material-symbols-outlined text-[10px]">check</span>';
+                    window.confluenceSynced = window.confluenceSynced || [];
+                    window.confluenceSynced.unshift({ name: boardName, url: data.url });
+                    renderConfluenceSyncedList();
                 } else {
-                    alert("Confluence publishing failed: " + (data.error || "Space key KAN page creation mismatch"));
+                    alert("Confluence publish failed: " + (data.error || "Unknown error"));
                     btn.disabled = false;
-                    btn.innerHTML = 'Publish to Confluence <span class="material-symbols-outlined text-xs">description</span>';
+                    btn.innerHTML = originalHtml;
                 }
-            } catch(e) {
+            } catch (e) {
                 alert("Network error: " + e.message);
                 btn.disabled = false;
-                btn.innerHTML = 'Publish to Confluence <span class="material-symbols-outlined text-xs">description</span>';
+                btn.innerHTML = originalHtml;
             }
         }
 
         // Miro Board Sync Handler
-        async function syncToMiroBoard(btn) {
-            btn.disabled = true;
-            btn.innerHTML = 'Syncing Board... <span class="material-symbols-outlined animate-spin text-xs">sync</span>';
-            try {
-                const response = await fetch('/miro/sync_board', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        name: (activeProject ? activeProject.name : "Banking Deposit page") + " Stories Mapping",
-                        stories: flattenWorkItems(window.workItems || [])
-                    })
-                });
-                const data = await response.json();
-                if (data.success) {
-                    btn.className = "px-4 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold uppercase tracking-wider";
-                    btn.innerHTML = 'Synced to Miro! <span class="material-symbols-outlined text-xs">check</span>';
-                    
-                    const statusDiv = document.getElementById('miroSyncStatus') || document.createElement('div');
-                    statusDiv.id = 'miroSyncStatus';
-                    statusDiv.className = "mt-3 text-xs text-slate-600";
-                    statusDiv.innerHTML = `Successfully synced! <a href="${data.url}" target="_blank" class="text-blue-600 underline font-bold">Open Miro Board</a>`;
-                    btn.parentNode.parentNode.appendChild(statusDiv);
-                } else {
-                    alert("Miro sync failed: " + (data.error || "Unknown error"));
-                    btn.disabled = false;
-                    btn.innerHTML = 'Sync to Miro Board <span class="material-symbols-outlined text-xs">dashboard</span>';
-                }
-            } catch(e) {
-                alert("Network error: " + e.message);
-                btn.disabled = false;
-                btn.innerHTML = 'Sync to Miro Board <span class="material-symbols-outlined text-xs">dashboard</span>';
-            }
-        }
-
         function renderMarkdown(md) {
             const escape = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             const lines = (md || '').split('\n');
@@ -2242,6 +2650,87 @@
                 alert("Network error: " + e.message);
                 btn.disabled = false;
                 btn.innerHTML = 'Recover from Workspace Folder <span class="material-symbols-outlined text-xs">restore</span>';
+            }
+        }
+
+        async function refreshArtifactsFromServer(silent) {
+            if (!activeProject) return;
+            try {
+                const response = await fetch(`/api/projects/${activeProject.id}`);
+                const data = await response.json();
+                if (data.success) {
+                    window.vaultFiles = data.project.artifacts.map(a => ({ name: a.name, url: a.url, content: a.content, external: !!a.is_external }));
+                    window.testScripts = data.project.artifacts.filter(a => a.is_test_script).map(a => ({ name: a.name, url: a.url, content: a.content }));
+                    // Called from the Jira Sync tab too now - don't yank the user
+                    // over to Artifacts when they didn't ask to switch tabs.
+                    if (!silent) switchWorkspaceTab(null, 'vault');
+                }
+            } catch (e) {}
+        }
+
+        async function artifactAskAi(btn) {
+            const input = document.getElementById('artifactAskAiInput');
+            const status = document.getElementById('artifactAskAiStatus');
+            const message = input ? input.value.trim() : '';
+            if (!message) return;
+            if (!activeProject) { alert('Open a project first.'); return; }
+
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = 'Thinking... <span class="material-symbols-outlined animate-spin text-xs">sync</span>';
+            if (status) status.textContent = '';
+
+            try {
+                const response = await fetch('/artifacts/quick_update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ project_id: activeProject.id, message })
+                });
+                const data = await response.json();
+                if (!data.success) {
+                    if (status) status.innerHTML = `<span class="text-rose-500">${escapeHtml(data.error || 'Could not process that.')}</span>`;
+                    return;
+                }
+                input.value = '';
+                const verb = data.action === 'update' ? 'Updated' : 'Created';
+                if (status) status.innerHTML = `<span class="text-emerald-600">${verb} ${escapeHtml(data.name)}.</span>`;
+                await refreshArtifactsFromServer();
+            } catch (e) {
+                if (status) status.innerHTML = `<span class="text-rose-500">Network error: ${escapeHtml(e.message)}</span>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            }
+        }
+
+        async function updateArtifactsFromJira(btn) {
+            if (!activeProject) { alert('Open a project first.'); return; }
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = 'Reading live Jira... <span class="material-symbols-outlined animate-spin text-xs">sync</span>';
+            try {
+                const response = await fetch('/artifacts/update_from_jira', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ project_id: activeProject.id })
+                });
+                const data = await response.json();
+                if (!data.success) {
+                    alert('Update failed: ' + (data.error || 'Unknown error'));
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml;
+                    return;
+                }
+                await refreshArtifactsFromServer(true);
+                btn.className = "px-4 py-2.5 rounded-xl bg-emerald-100 border border-emerald-300 text-emerald-800 text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5";
+                btn.innerHTML = `Updated ${data.updated.length} doc(s) <span class="material-symbols-outlined text-xs">check</span>`;
+                if (data.failed && data.failed.length > 0) {
+                    alert(`These documents failed to generate and were left UNCHANGED (the AI service returned an error, likely a rate/quota limit): ${data.failed.join(', ')}. Retry later once the issue clears.`);
+                }
+            } catch (e) {
+                alert('Network error: ' + e.message);
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
             }
         }
 

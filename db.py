@@ -91,6 +91,27 @@ def init_db():
             expected_result TEXT,
             priority TEXT,
             status TEXT NOT NULL DEFAULT 'Not Run',
+            jira_key TEXT,
+            synced_at TEXT,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS change_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            code TEXT,
+            title TEXT NOT NULL,
+            type TEXT,
+            stage TEXT,
+            priority TEXT,
+            status TEXT NOT NULL DEFAULT 'Proposed',
+            description TEXT,
+            impact_summary TEXT,
+            work_item_id INTEGER REFERENCES work_items(id) ON DELETE SET NULL,
+            raised_by TEXT,
+            raised_at TEXT NOT NULL,
+            approved_by TEXT,
+            decision_at TEXT,
             created_at TEXT NOT NULL
         );
 
@@ -118,6 +139,14 @@ def init_db():
         conn.commit()
     except sqlite3.OperationalError:
         pass  # column already exists
+
+    # Migration for databases created before test cases could be pushed to Jira
+    for column, coltype in (("jira_key", "TEXT"), ("synced_at", "TEXT")):
+        try:
+            conn.execute(f"ALTER TABLE test_cases ADD COLUMN {column} {coltype}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
     conn.close()
 
@@ -374,6 +403,66 @@ def replace_unsynced_work_items(project_id, tree):
     touch_project(project_id)
 
 
+def add_work_items(project_id, insertions):
+    """
+    Additive insert for the Draft pane's quick-add features (AI quick-create
+    and the manual "+ Create" form) - unlike replace_unsynced_work_items,
+    this never deletes existing drafts, it only appends. `insertions` is a
+    list of {parent_code, node}: parent_code is an existing work_items.code
+    in this project (or falsy to create a new top-level item), and node is
+    a nested dict like the generation tree: {issuetype, summary,
+    description, priority, children: [...]}. A node created earlier in the
+    same call can be referenced as a later insertion's parent via its own
+    freshly-assigned code, so "add a story and 3 tasks under it" works in
+    one request. Returns the newly created rows (with their assigned codes).
+    """
+    now = _now()
+    conn = get_conn()
+    code_to_id = {
+        r["code"]: r["id"] for r in conn.execute(
+            "SELECT id, code FROM work_items WHERE project_id = ? AND code IS NOT NULL", (project_id,)
+        ).fetchall()
+    }
+    counters = _seed_code_counters(conn, project_id)
+    created = []
+
+    def next_code(issuetype):
+        prefix = CODE_PREFIXES.get(issuetype, "ITM")
+        counters[issuetype] = counters.get(issuetype, 0) + 1
+        return f"{prefix}{counters[issuetype]:03d}"
+
+    def insert_node(node, parent_id):
+        code = next_code(node.get("issuetype"))
+        cur = conn.execute(
+            "INSERT INTO work_items (project_id, parent_id, issuetype, summary, description, priority, jira_key, synced_at, code, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
+            (project_id, parent_id, node.get("issuetype"), node.get("summary"), node.get("description"), node.get("priority"), code, now),
+        )
+        new_id = cur.lastrowid
+        code_to_id[code] = new_id
+        created.append({"id": new_id, "code": code, "issuetype": node.get("issuetype"), "summary": node.get("summary"), "parent_id": parent_id})
+        for child in node.get("children") or []:
+            insert_node(child, new_id)
+
+    for ins in insertions:
+        parent_code = ins.get("parent_code")
+        parent_id = code_to_id.get(parent_code) if parent_code else None
+        insert_node(ins["node"], parent_id)
+
+    conn.commit()
+    conn.close()
+    touch_project(project_id)
+    return created
+
+
+def get_work_item_by_code(project_id, code):
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM work_items WHERE project_id = ? AND code = ?", (project_id, code)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 def get_work_item_tree(project_id):
     conn = get_conn()
     rows = [dict(r) for r in conn.execute(
@@ -458,17 +547,36 @@ def get_test_cases(project_id):
     return [dict(r) for r in rows]
 
 
+def _seed_test_case_counter(conn, project_id):
+    """Highest existing TC### suffix for this project, so newly-inserted test
+    cases continue the sequence rather than restart it - codes on already
+    Jira-synced test cases are permanent and must never be reused."""
+    n = 0
+    rows = conn.execute(
+        "SELECT code FROM test_cases WHERE project_id = ? AND code IS NOT NULL", (project_id,)
+    ).fetchall()
+    for r in rows:
+        code = r["code"] or ""
+        if code.startswith("TC"):
+            try:
+                n = max(n, int(code[2:]))
+            except ValueError:
+                pass
+    return n
+
+
 def replace_test_cases(project_id, test_cases):
     """
-    Full-replace per project - test cases are generated alongside (and
-    validate) the current draft work item tree, so they're regenerated
-    together rather than accumulating stale drafts. `test_cases` is a list
-    of dicts: {linked_code, title, steps, expected_result, priority} where
-    linked_code is a work_items.code (e.g. "STY001") this test case covers.
+    Deletes only never-synced test cases (jira_key IS NULL) before inserting
+    the fresh generated batch, mirroring replace_unsynced_work_items - test
+    cases already pushed to Jira keep their jira_key, code, and status
+    permanently instead of being wiped on the next regeneration. `test_cases`
+    is a list of dicts: {linked_code, title, steps, expected_result, priority}
+    where linked_code is a work_items.code (e.g. "STY001") this test case covers.
     """
     now = _now()
     conn = get_conn()
-    conn.execute("DELETE FROM test_cases WHERE project_id = ?", (project_id,))
+    conn.execute("DELETE FROM test_cases WHERE project_id = ? AND jira_key IS NULL", (project_id,))
 
     code_to_id = {
         r["code"]: r["id"] for r in conn.execute(
@@ -476,7 +584,7 @@ def replace_test_cases(project_id, test_cases):
         ).fetchall()
     }
 
-    n = 0
+    n = _seed_test_case_counter(conn, project_id)
     for tc in test_cases:
         n += 1
         conn.execute(
@@ -491,6 +599,64 @@ def replace_test_cases(project_id, test_cases):
                 tc.get("priority"),
                 now,
             ),
+        )
+    conn.commit()
+    conn.close()
+    touch_project(project_id)
+
+
+def add_test_cases(project_id, work_item_id, test_cases):
+    """
+    Additive insert of test cases linked to ONE existing work item - used by
+    the Jira Sync panel's per-item "Generate Test Cases" action, which never
+    touches any other item's test cases. `test_cases` is a list of dicts:
+    {title, steps, expected_result, priority}. Returns the newly created rows.
+    """
+    now = _now()
+    conn = get_conn()
+    n = _seed_test_case_counter(conn, project_id)
+    created = []
+    for tc in test_cases:
+        n += 1
+        code = f"TC{n:03d}"
+        cur = conn.execute(
+            "INSERT INTO test_cases (project_id, work_item_id, code, title, steps, expected_result, priority, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'Not Run', ?)",
+            (
+                project_id,
+                work_item_id,
+                code,
+                tc.get("title", "Untitled Test Case"),
+                tc.get("steps"),
+                tc.get("expected_result"),
+                tc.get("priority"),
+                now,
+            ),
+        )
+        created.append({"id": cur.lastrowid, "code": code, "title": tc.get("title", "Untitled Test Case")})
+    conn.commit()
+    conn.close()
+    touch_project(project_id)
+    return created
+
+
+def get_test_cases_by_ids(test_case_ids):
+    if not test_case_ids:
+        return []
+    conn = get_conn()
+    placeholders = ",".join("?" for _ in test_case_ids)
+    rows = conn.execute(f"SELECT * FROM test_cases WHERE id IN ({placeholders})", tuple(test_case_ids)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def mark_test_cases_synced(project_id, results):
+    """results: list of {id, jira_key} using the local test_cases.id."""
+    now = _now()
+    conn = get_conn()
+    for r in results:
+        conn.execute(
+            "UPDATE test_cases SET jira_key = ?, synced_at = ? WHERE id = ? AND project_id = ?",
+            (r.get("jira_key"), now, r.get("id"), project_id),
         )
     conn.commit()
     conn.close()
@@ -539,13 +705,19 @@ def get_rtm_rows(project_id):
             for tc in linked_tests:
                 rows.append({
                     **base,
+                    "test_case_id": tc["id"],
                     "test_case_code": tc["code"],
                     "test_case_title": tc["title"],
                     "test_case_status": tc["status"],
+                    "test_case_jira_key": tc.get("jira_key"),
                     "covered": True,
                 })
         else:
-            rows.append({**base, "test_case_code": None, "test_case_title": None, "test_case_status": None, "covered": False})
+            rows.append({
+                **base,
+                "test_case_id": None, "test_case_code": None, "test_case_title": None,
+                "test_case_status": None, "test_case_jira_key": None, "covered": False,
+            })
 
     rows.sort(key=lambda r: (r["epic_code"] or "￿", r["item_code"] or ""))
     return rows
@@ -559,6 +731,132 @@ def clear_work_item_sync_by_jira_key(jira_key):
     conn.execute("UPDATE work_items SET jira_key = NULL, synced_at = NULL WHERE jira_key = ?", (jira_key,))
     conn.commit()
     conn.close()
+
+
+# ============================================================
+# CHANGE REQUESTS (Change Log / Scope Register)
+# ============================================================
+
+def _seed_cr_counter(conn, project_id):
+    """Highest existing CR### suffix for this project, so new change requests
+    continue the sequence rather than restart it."""
+    n = 0
+    rows = conn.execute(
+        "SELECT code FROM change_requests WHERE project_id = ? AND code IS NOT NULL", (project_id,)
+    ).fetchall()
+    for r in rows:
+        code = r["code"] or ""
+        if code.startswith("CR"):
+            try:
+                n = max(n, int(code[2:]))
+            except ValueError:
+                pass
+    return n
+
+
+def create_change_request(project_id, fields):
+    """
+    fields: {title, type, stage, priority, description, impact_summary,
+    work_item_code (optional - an existing work_items.code to link),
+    raised_by, status (optional, defaults to 'Proposed')}.
+    """
+    now = _now()
+    conn = get_conn()
+
+    work_item_id = None
+    work_item_code = fields.get("work_item_code")
+    if work_item_code:
+        row = conn.execute(
+            "SELECT id FROM work_items WHERE project_id = ? AND code = ?", (project_id, work_item_code)
+        ).fetchone()
+        work_item_id = row["id"] if row else None
+
+    n = _seed_cr_counter(conn, project_id) + 1
+    code = f"CR{n:03d}"
+    status = fields.get("status") or "Proposed"
+    cur = conn.execute(
+        """INSERT INTO change_requests
+           (project_id, code, title, type, stage, priority, status, description, impact_summary,
+            work_item_id, raised_by, raised_at, approved_by, decision_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            project_id, code, fields.get("title", "Untitled Change"), fields.get("type"), fields.get("stage"),
+            fields.get("priority"), status, fields.get("description"), fields.get("impact_summary"),
+            work_item_id, fields.get("raised_by"), fields.get("raised_at") or now,
+            fields.get("approved_by"), fields.get("decision_at"), now,
+        ),
+    )
+    new_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    touch_project(project_id)
+    return get_change_request(new_id)
+
+
+def get_change_request(cr_id):
+    conn = get_conn()
+    row = conn.execute(
+        """SELECT cr.*, wi.code AS work_item_code, wi.summary AS work_item_summary
+           FROM change_requests cr LEFT JOIN work_items wi ON wi.id = cr.work_item_id
+           WHERE cr.id = ?""",
+        (cr_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def list_change_requests(project_id):
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT cr.*, wi.code AS work_item_code, wi.summary AS work_item_summary
+           FROM change_requests cr LEFT JOIN work_items wi ON wi.id = cr.work_item_id
+           WHERE cr.project_id = ? ORDER BY cr.id ASC""",
+        (project_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_change_request(cr_id, fields):
+    """Partial update - only columns present in `fields` are touched.
+    `work_item_code` (an existing work_items.code, or '' to unlink) resolves
+    to work_item_id same as create_change_request."""
+    conn = get_conn()
+    row = conn.execute("SELECT project_id FROM change_requests WHERE id = ?", (cr_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    project_id = row["project_id"]
+
+    updates = {}
+    for col in ("title", "type", "stage", "priority", "status", "description", "impact_summary", "raised_by", "approved_by", "decision_at"):
+        if col in fields:
+            updates[col] = fields[col]
+    if "work_item_code" in fields:
+        code = fields.get("work_item_code")
+        if code:
+            wi = conn.execute("SELECT id FROM work_items WHERE project_id = ? AND code = ?", (project_id, code)).fetchone()
+            updates["work_item_id"] = wi["id"] if wi else None
+        else:
+            updates["work_item_id"] = None
+
+    if updates:
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        conn.execute(f"UPDATE change_requests SET {set_clause} WHERE id = ?", (*updates.values(), cr_id))
+        conn.commit()
+    conn.close()
+    touch_project(project_id)
+    return get_change_request(cr_id)
+
+
+def delete_change_request(cr_id):
+    conn = get_conn()
+    row = conn.execute("SELECT project_id FROM change_requests WHERE id = ?", (cr_id,)).fetchone()
+    conn.execute("DELETE FROM change_requests WHERE id = ?", (cr_id,))
+    conn.commit()
+    conn.close()
+    if row:
+        touch_project(row["project_id"])
 
 
 # ============================================================
