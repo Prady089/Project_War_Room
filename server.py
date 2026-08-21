@@ -1801,10 +1801,13 @@ async def jira_push_test_cases(request: Request):
             if expected_text:
                 desc_lines.append("Expected Result:\n" + expected_text)
 
+            tc_summary = f"[TEST] {tc.get('title', 'Untitled Test Case')}"
+            if tc.get("code"):
+                tc_summary = f"{tc['code']} · {tc_summary}"
             payload = {
                 "fields": {
                     "project": {"key": jira_key},
-                    "summary": f"[TEST] {tc.get('title', 'Untitled Test Case')}",
+                    "summary": tc_summary,
                     "issuetype": {"name": "Subtask"},
                     "parent": {"key": parent_key},
                     "labels": ["test-case"],
@@ -1900,10 +1903,13 @@ async def jira_push_work_items(request: Request):
                     results.append({"id": item["id"], "success": False, "error": "Subtask requires a parent"})
                     continue
 
+                summary = item.get("summary", "New Item")
+                if item.get("code"):
+                    summary = f"{item['code']} · {summary}"
                 payload = {
                     "fields": {
                         "project": {"key": jira_key},
-                        "summary": item.get("summary", "New Item"),
+                        "summary": summary,
                         "issuetype": {"name": item.get("issuetype", "Task")},
                     }
                 }
