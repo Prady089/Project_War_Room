@@ -3,7 +3,14 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nexus.db")
+# DATA_DIR defaults to sitting next to this file (repo root) - fine for local
+# dev, where the working copy itself is the persistent store. On Render (or
+# any host with an ephemeral filesystem), set DATA_DIR to a mounted
+# persistent disk's path (e.g. /var/data) so nexus.db survives redeploys
+# instead of being recreated empty by init_db() every time.
+DATA_DIR = os.getenv("DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
+os.makedirs(DATA_DIR, exist_ok=True)
+DB_PATH = os.path.join(DATA_DIR, "nexus.db")
 
 
 def get_conn():

@@ -22,7 +22,10 @@ db.init_db()
 # CONFIGURATION
 # ============================================================
 
-WORKSPACE_DIR = os.path.join(os.getcwd(), "workspace")
+# Shares db.DATA_DIR (rather than reading DATA_DIR separately) so the DB and
+# the generated-files folder always live on the same disk - see db.py for
+# why this matters on Render.
+WORKSPACE_DIR = os.path.join(db.DATA_DIR, "workspace")
 if not os.path.exists(WORKSPACE_DIR):
     os.makedirs(WORKSPACE_DIR)
 
