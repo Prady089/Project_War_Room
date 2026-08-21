@@ -366,7 +366,7 @@ def _miro_create_board(headers, name, description):
     return data.get("id"), data.get("viewLink")
 
 
-def _miro_create_text(headers, board_id, html, x, y, width, font_size="32", color="#e2e8f0", align="center"):
+def _miro_create_text(headers, board_id, html, x, y, width, font_size="32", color="#1e293b", align="center"):
     requests.post(f"https://api.miro.com/v2/boards/{board_id}/texts", headers=headers, json={
         "data": {"content": html},
         "style": {"fontSize": font_size, "color": color, "textAlign": align},
@@ -418,7 +418,7 @@ def _miro_create_connector(headers, board_id, start_id, end_id, color, label=Non
 
 
 LANE_ACCENTS = ["#10b981", "#3b82f6", "#a855f7", "#f59e0b", "#ec4899"]
-LANE_FILLS = ["#0b2b22", "#0b1f33", "#1f1533", "#332708", "#330d20"]
+LANE_FILLS = ["#ecfdf5", "#eff6ff", "#faf5ff", "#fffbeb", "#fdf2f8"]
 
 COL_SPACING = 340
 LEFT_MARGIN = 170
@@ -539,11 +539,11 @@ def create_miro_process_flow(miro_token, board_name, data):
         # BPMN-flavoured shapes: small circles for start/end events, a rounded
         # "task" box for process steps, a diamond for decisions/gateways.
         NODE_STYLES = {
-            "start": ("circle", "#065f46", "#10b981", "#ffffff", 130, 130, True),
-            "end": ("circle", "#065f46", "#10b981", "#ffffff", 130, 130, True),
-            "end_success": ("circle", "#065f46", "#10b981", "#ffffff", 130, 130, True),
-            "end_failure": ("circle", "#7f1d1d", "#ef4444", "#ffffff", 130, 130, True),
-            "decision": ("rhombus", "#78350f", "#f59e0b", "#ffffff", 260, 160, False),
+            "start": ("circle", "#d1fae5", "#10b981", "#065f46", 130, 130, True),
+            "end": ("circle", "#d1fae5", "#10b981", "#065f46", 130, 130, True),
+            "end_success": ("circle", "#d1fae5", "#10b981", "#065f46", 130, 130, True),
+            "end_failure": ("circle", "#fee2e2", "#ef4444", "#7f1d1d", 130, 130, True),
+            "decision": ("rhombus", "#fef3c7", "#f59e0b", "#78350f", 260, 160, False),
         }
 
         shape_ids = {}
@@ -554,7 +554,7 @@ def create_miro_process_flow(miro_token, board_name, data):
             row = sub_row[sid]
             accent = LANE_ACCENTS[lane_index.get(lane, 0) % len(LANE_ACCENTS)]
             shape, fill, border, txt_color, w, h, terse = NODE_STYLES.get(
-                s.get("type", "process"), ("round_rectangle", "#151f32", accent, "#e2e8f0", 240, 130, False)
+                s.get("type", "process"), ("round_rectangle", "#ffffff", accent, "#1e293b", 240, 130, False)
             )
             title = s.get("title", f"Step {sid}")
             text = s.get("text", "")
@@ -578,18 +578,18 @@ def create_miro_process_flow(miro_token, board_name, data):
 
         legend_y = total_lanes_height + 60
         _miro_create_text(headers, board_id, "<p><strong>Legend</strong></p>", 60, legend_y, 200,
-                           font_size="20", color="#94a3b8", align="left")
+                           font_size="20", color="#64748b", align="left")
         legend_items = [
-            ("circle", "#065f46", "#10b981", "Start / Success End"),
-            ("round_rectangle", "#151f32", "#3b82f6", "Process Step"),
-            ("rhombus", "#78350f", "#f59e0b", "Decision Point"),
-            ("circle", "#7f1d1d", "#ef4444", "Failure / Rejected End"),
+            ("circle", "#d1fae5", "#10b981", "Start / Success End"),
+            ("round_rectangle", "#ffffff", "#3b82f6", "Process Step"),
+            ("rhombus", "#fef3c7", "#f59e0b", "Decision Point"),
+            ("circle", "#fee2e2", "#ef4444", "Failure / Rejected End"),
         ]
         lx = 0
         for shape, fill, border, label in legend_items:
-            _miro_create_shape(headers, board_id, shape, "", fill, border, "#ffffff", lx, legend_y + 80, 90, 50)
+            _miro_create_shape(headers, board_id, shape, "", fill, border, "#1e293b", lx, legend_y + 80, 90, 50)
             _miro_create_text(headers, board_id, f"<p>{label}</p>", lx, legend_y + 130, 220,
-                               font_size="14", color="#94a3b8", align="left")
+                               font_size="14", color="#64748b", align="left")
             lx += 260
 
         return board_url
@@ -598,7 +598,7 @@ def create_miro_process_flow(miro_token, board_name, data):
 
 
 TIER_ACCENTS = ["#3b82f6", "#a855f7", "#0d9488", "#f59e0b", "#16a34a"]
-TIER_FILLS = ["#0b1f33", "#1f1533", "#062b28", "#332708", "#0b2b1c"]
+TIER_FILLS = ["#eff6ff", "#faf5ff", "#f0fdfa", "#fffbeb", "#f0fdf4"]
 
 TIER_COMP_SPACING = 300
 TIER_LEFT_MARGIN = 150
@@ -651,7 +651,7 @@ def create_miro_architecture_diagram(miro_token, board_name, data):
                 abs_x = c_idx * TIER_COMP_SPACING + TIER_LEFT_MARGIN
                 abs_y = t_idx * (TIER_HEIGHT + TIER_GAP) + TIER_HEIGHT / 2
                 sid = _miro_create_shape(
-                    headers, board_id, "rectangle", content, "#151f32", accent, "#e2e8f0",
+                    headers, board_id, "rectangle", content, "#ffffff", accent, "#1e293b",
                     local_x, local_y, 260, 130, parent_id=frame_id,
                     fallback_x=abs_x, fallback_y=abs_y
                 )
@@ -686,13 +686,14 @@ def create_miro_architecture_diagram(miro_token, board_name, data):
 
         legend_y = len(tiers) * (TIER_HEIGHT + TIER_GAP) + 60
         _miro_create_text(headers, board_id, "<p><strong>Legend</strong></p>", 60, legend_y, 200,
-                           font_size="20", color="#94a3b8", align="left")
+                           font_size="20", color="#64748b", align="left")
         lx = 0
         for t_idx, tier in enumerate(tiers):
             accent = TIER_ACCENTS[t_idx % len(TIER_ACCENTS)]
-            _miro_create_shape(headers, board_id, "rectangle", "", "#151f32", accent, "#ffffff", lx, legend_y + 80, 90, 50)
+            fill = TIER_FILLS[t_idx % len(TIER_FILLS)]
+            _miro_create_shape(headers, board_id, "rectangle", "", fill, accent, "#1e293b", lx, legend_y + 80, 90, 50)
             _miro_create_text(headers, board_id, f"<p>{tier.get('name', f'Tier {t_idx+1}')}</p>", lx, legend_y + 130, 220,
-                               font_size="14", color="#94a3b8", align="left")
+                               font_size="14", color="#64748b", align="left")
             lx += 260
 
         return board_url
