@@ -2,7 +2,7 @@ import os, re, time, shutil, stat, io, csv
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-import google.generativeai as genai
+from openai import OpenAI
 import json
 import asyncio
 import requests
@@ -42,10 +42,9 @@ def get_project_dir(project_id):
     os.makedirs(project_path, exist_ok=True)
     return project_path, safe_id
 
-# Gemini - accept either env var name; .env currently sets GEMINI_API_KEY
-# (the name Google's own docs use), GOOGLE_API_KEY kept as a fallback for
-# any older .env still using that name.
-genai.configure(api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", ""))
+# OpenAI - migrated off Gemini after repeatedly hitting its free-tier daily
+# request quota (see llm() below for the actual call).
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
 
 # ============================================================
 # PROJECT PERSISTENCE API (SQLite)
@@ -274,19 +273,19 @@ def get_confluence_space_id(space_key, headers, auth):
 
 def llm(system, user):
     try:
-        model_name = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
-        model = genai.GenerativeModel(
-            model_name=model_name,
-            system_instruction=system + "\n\nImportant: Do not recite copyrighted material or training data verbatim. Be creative and synthesize new logic based on requirements."
+        model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        response = openai_client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system + "\n\nImportant: Do not recite copyrighted material or training data verbatim. Be creative and synthesize new logic based on requirements."},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.7,
         )
-        response = model.generate_content(
-            user,
-            generation_config=genai.types.GenerationConfig(temperature=0.7)
-        )
-        if hasattr(response, 'candidates') and response.candidates:
-            if response.candidates[0].finish_reason == 4:
-                return "AGENT ERROR: Recitation block (Finish Reason 4). Try re-phrasing your request slightly."
-        return response.text.strip()
+        choice = response.choices[0]
+        if choice.finish_reason == "content_filter":
+            return "AGENT ERROR: Content filter block. Try re-phrasing your request slightly."
+        return (choice.message.content or "").strip()
     except Exception as e:
         return f"LLM_ERROR: {str(e)}"
 
