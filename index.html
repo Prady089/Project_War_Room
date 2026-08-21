@@ -86,12 +86,18 @@
            Semantic status colors (bg-emerald-500, bg-rose-500, the *-50
            badge tints, etc.) are deliberately left alone so charts and
            status pills stay crisp and readable. */
-        .bg-white {
+        /* Form controls are excluded from the glass treatment below - Tailwind
+           Forms renders a checkbox's checked state as background-color:
+           currentColor (dark) with a white checkmark icon; forcing a
+           translucent white background there makes the checkmark invisible
+           (white-on-white). Selects/inputs stay plain for the same reason:
+           functional clarity over decoration on interactive controls. */
+        .bg-white:not(input):not(select):not(textarea) {
             background-color: var(--glass-bg) !important;
             backdrop-filter: blur(24px) saturate(180%);
             -webkit-backdrop-filter: blur(24px) saturate(180%);
         }
-        .bg-slate-50 {
+        .bg-slate-50:not(input):not(select):not(textarea) {
             background-color: var(--glass-bg-soft) !important;
             backdrop-filter: blur(16px) saturate(160%);
             -webkit-backdrop-filter: blur(16px) saturate(160%);
