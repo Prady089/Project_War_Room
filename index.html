@@ -233,10 +233,6 @@
                         <span class="material-symbols-outlined text-base">folder_zip</span>
                         Artifacts
                     </button>
-                    <button id="tabButton_test-scripts" onclick="switchWorkspaceTab(this, 'test-scripts')" class="w-full flex items-center gap-3 px-4 py-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-50 text-xs transition-all workspace-tab">
-                        <span class="material-symbols-outlined text-base">integration_instructions</span>
-                        Test Scripts
-                    </button>
                     <button id="tabButton_changelog" onclick="switchWorkspaceTab(this, 'changelog')" class="w-full flex items-center gap-3 px-4 py-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-50 text-xs transition-all workspace-tab">
                         <span class="material-symbols-outlined text-base">history</span>
                         Change Log
@@ -769,7 +765,6 @@
             // Hydrate this project's persisted state from the database
             chatHistory = proj.chat_messages.map(m => ({ role: m.role, text: m.text }));
             window.vaultFiles = proj.artifacts.map(a => ({ name: a.name, url: a.url, content: a.content, external: !!a.is_external }));
-            window.testScripts = proj.artifacts.filter(a => a.is_test_script).map(a => ({ name: a.name, url: a.url, content: a.content }));
             window.workItems = proj.work_items || [];
             window.agentContributions = proj.agent_contributions.map(a => ({ agent: a.agent_name, text: a.text }));
             window.selectedDocs = [];
@@ -1057,23 +1052,6 @@
                         </div>
                     </div>
                 `;
-            } else if (tabName === 'test-scripts') {
-                icon = "integration_instructions";
-                label = "TEST SCRIPT";
-                desc = "Review generated manual and automated test script code cases";
-                const scripts = window.testScripts || [];
-                if (scripts.length > 0) {
-                    const links = scripts.map(s => `
-                        <div class="space-y-2">
-                            <a href="${s.url}" target="_blank" class="block p-3 rounded-lg bg-slate-50 border border-slate-200 text-blue-600 hover:bg-slate-100 transition-colors font-medium">${s.name}</a>
-                            <div class="p-4 rounded-xl bg-slate-100 border border-slate-200 text-[10px] font-mono text-slate-600 overflow-x-auto whitespace-pre">${s.content}</div>
-                        </div>
-                    `).join('');
-                    htmlContent = `
-                           <div class="space-y-4 max-h-96 overflow-y-auto no-scrollbar">${links}</div>`;
-                } else {
-                    htmlContent = "No test scripts generated yet. Finalize requirements in the War Room chat first.";
-                }
             } else if (tabName === 'vault') {
                 icon = "folder_zip";
                 label = "ARTIFACTS";
@@ -1529,7 +1507,6 @@
 
                 if (data.success) {
                     window.vaultFiles = data.files;
-                    window.testScripts = data.test_scripts;
                     window.workItems = data.work_items || [];
 
                     // Automatically switch the active workspace view to the "Artifacts" tab
@@ -2748,7 +2725,6 @@
                 const data = await response.json();
                 if (data.success) {
                     window.vaultFiles = data.project.artifacts.map(a => ({ name: a.name, url: a.url, content: a.content, external: !!a.is_external }));
-                    window.testScripts = data.project.artifacts.filter(a => a.is_test_script).map(a => ({ name: a.name, url: a.url, content: a.content }));
                     // Called from the Jira Sync tab too now - don't yank the user
                     // over to Artifacts when they didn't ask to switch tabs.
                     if (!silent) switchWorkspaceTab(null, 'vault');
