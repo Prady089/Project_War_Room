@@ -2359,11 +2359,36 @@ async def jira_issues(status: str = "all", max_results: int = 50, project_id: st
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+def _infer_test_status_from_jira(jira_status):
+    """
+    Maps a linked test-case Subtask's live Jira workflow status to our
+    Pass/Fail/Not Run vocabulary. This is a naming-convention heuristic, not
+    a dedicated signal - most teams don't have a distinct Jira status for
+    "test failed", so anything not recognizably done/passed or
+    failed/rejected/blocked is left as Not Run (i.e. still pending),
+    matching how a real QA workflow reads "In Progress"/"In Review".
+    """
+    if not jira_status:
+        return None
+    s = jira_status.lower()
+    if any(k in s for k in ("fail", "reject", "block")):
+        return "Fail"
+    if any(k in s for k in ("done", "closed", "resolved", "pass")):
+        return "Pass"
+    return "Not Run"
+
+
 def _get_rtm_rows_with_status(project_id):
     """Shared by /rtm/{project_id} and the RTM CSV report. Jira status is
     fetched live here (a single batched JQL lookup by key) rather than
     cached, since it changes outside this app; the lookup is best-effort so
-    a Jira hiccup still returns the local matrix with jira_status left null."""
+    a Jira hiccup still returns the local matrix with jira_status left null.
+
+    Also self-heals each test case's local Pass/Fail/Not Run status from its
+    linked Jira Subtask's live status (see _infer_test_status_from_jira) -
+    without this, a test case pushed to Jira and worked there would stay
+    "Not Run" here forever, since nothing else ever writes to that column.
+    """
     rows = db.get_rtm_rows(project_id)
 
     jira_keys = sorted({r["jira_key"] for r in rows if r.get("jira_key")} | {r["test_case_jira_key"] for r in rows if r.get("test_case_jira_key")})
@@ -2385,6 +2410,7 @@ def _get_rtm_rows_with_status(project_id):
         except Exception:
             pass
 
+    status_updates = []
     for row in rows:
         key = row.get("jira_key")
         row["jira_status"] = status_by_key.get(key) if key else None
@@ -2392,6 +2418,18 @@ def _get_rtm_rows_with_status(project_id):
         tc_key = row.get("test_case_jira_key")
         row["test_case_jira_status"] = status_by_key.get(tc_key) if tc_key else None
         row["test_case_jira_url"] = url_by_key.get(tc_key) if tc_key else None
+
+        inferred = _infer_test_status_from_jira(row["test_case_jira_status"])
+        if inferred and row.get("test_case_id") and inferred != row.get("test_case_status"):
+            row["test_case_status"] = inferred
+            status_updates.append({"id": row["test_case_id"], "status": inferred})
+
+    if status_updates:
+        try:
+            db.update_test_case_statuses(status_updates)
+        except Exception:
+            pass
+
     return rows
 
 

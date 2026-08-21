@@ -682,6 +682,19 @@ def mark_test_cases_synced(project_id, results):
     touch_project(project_id)
 
 
+def update_test_case_statuses(updates):
+    """updates: list of {id, status} - bulk-applies statuses inferred from
+    each test case's linked Jira Subtask, so RTM's live Jira lookup can
+    self-heal the local Pass/Fail/Not Run field on every load."""
+    if not updates:
+        return
+    conn = get_conn()
+    for u in updates:
+        conn.execute("UPDATE test_cases SET status = ? WHERE id = ?", (u["status"], u["id"]))
+    conn.commit()
+    conn.close()
+
+
 def get_rtm_rows(project_id):
     """
     Assembles the Requirements Traceability Matrix: one row per Story/Task,
