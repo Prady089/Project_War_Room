@@ -714,18 +714,37 @@
             `;
         }
 
-        async function openWorkspace(id) {
+        // Keeps the browser URL in sync with which project/tab is open, so a
+        // refresh (or the back/forward buttons) restores the same place
+        // instead of always dropping back to the Home project list.
+        function updateUrlState(projectId, tabName, replace) {
+            const url = new URL(window.location);
+            if (projectId) {
+                url.searchParams.set('project', projectId);
+                url.searchParams.set('tab', tabName || 'dashboard');
+            } else {
+                url.searchParams.delete('project');
+                url.searchParams.delete('tab');
+            }
+            const state = { projectId: projectId || null, tabName: tabName || null };
+            if (replace) history.replaceState(state, '', url);
+            else history.pushState(state, '', url);
+        }
+
+        async function openWorkspace(id, initialTab, replaceUrl) {
             let proj;
             try {
                 const response = await fetch(`/api/projects/${id}`);
                 const data = await response.json();
                 if (!data.success) {
                     alert("Failed to load project: " + (data.error || "Not found"));
+                    updateUrlState(null, null, true);
                     return;
                 }
                 proj = data.project;
             } catch (e) {
                 alert("Network error loading project: " + e.message);
+                updateUrlState(null, null, true);
                 return;
             }
 
@@ -783,11 +802,13 @@
             // Show main sidebar
             document.getElementById('mainSidebar').classList.remove('hidden');
 
-            // Default to the Dashboard on open
-            switchWorkspaceTab(null, 'dashboard');
+            updateUrlState(proj.id, initialTab || 'dashboard', !!replaceUrl);
+
+            // Default to the Dashboard on open, unless restoring a specific tab
+            switchWorkspaceTab(null, initialTab || 'dashboard');
         }
 
-        function navigateHome() {
+        function navigateHome(skipUrlUpdate) {
             activeProject = null;
             document.getElementById('headerProjectName').classList.add('hidden');
 
@@ -797,6 +818,10 @@
             // Hide main sidebar
             document.getElementById('mainSidebar').classList.add('hidden');
 
+            // skipUrlUpdate: true when called from the popstate handler, where
+            // the browser already moved the history position itself - pushing
+            // another entry here would corrupt the back/forward stack.
+            if (!skipUrlUpdate) updateUrlState(null, null, false);
             fetchJiraStatus();
         }
 
@@ -822,6 +847,9 @@
         }
 
         function switchWorkspaceTab(el, tabName) {
+            if (activeProject) {
+                updateUrlState(activeProject.id, tabName, true);
+            }
             if (!el) {
                 el = document.getElementById('tabButton_' + tabName);
             }
@@ -2982,9 +3010,32 @@
             }
         }
 
-        // Initialize
+        // Initialize - restore whatever project/tab is in the URL (e.g. after
+        // a refresh) instead of always dropping back to the Home project list.
         renderProjects();
-        fetchJiraStatus();
+        const initialUrlParams = new URLSearchParams(window.location.search);
+        const initialProjectId = initialUrlParams.get('project');
+        if (initialProjectId) {
+            openWorkspace(initialProjectId, initialUrlParams.get('tab') || 'dashboard', true);
+        } else {
+            fetchJiraStatus();
+        }
+
+        // Browser back/forward: re-sync the UI to whatever the URL now says.
+        window.addEventListener('popstate', () => {
+            const params = new URLSearchParams(window.location.search);
+            const projectId = params.get('project');
+            const tab = params.get('tab') || 'dashboard';
+            if (projectId) {
+                if (!activeProject || activeProject.id !== projectId) {
+                    openWorkspace(projectId, tab, true);
+                } else {
+                    switchWorkspaceTab(null, tab);
+                }
+            } else if (activeProject) {
+                navigateHome(true);
+            }
+        });
 
         document.getElementById('workspacePromptInput').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') sendWorkspacePrompt();
