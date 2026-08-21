@@ -2774,8 +2774,14 @@
                     return;
                 }
                 input.value = '';
-                const verb = data.action === 'update' ? 'Updated' : 'Created';
-                if (status) status.innerHTML = `<span class="text-emerald-600">${verb} ${escapeHtml(data.name)}.</span>`;
+                if (status) {
+                    if (data.action === 'miro') {
+                        status.innerHTML = `<span class="text-emerald-600">Generated ${escapeHtml(data.name)}.</span> <a href="${data.url}" target="_blank" class="text-blue-600 underline font-bold">Open Board</a>`;
+                    } else {
+                        const verb = data.action === 'update' ? 'Updated' : 'Created';
+                        status.innerHTML = `<span class="text-emerald-600">${verb} ${escapeHtml(data.name)}.</span>`;
+                    }
+                }
                 await refreshArtifactsFromServer();
             } catch (e) {
                 if (status) status.innerHTML = `<span class="text-rose-500">Network error: ${escapeHtml(e.message)}</span>`;

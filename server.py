@@ -358,9 +358,15 @@ def _miro_headers(miro_token):
 
 
 def _miro_create_board(headers, name, description):
+    # Miro board names are capped at 60 chars server-side (a 400 otherwise) -
+    # callers build names from a project name + an LLM-generated title with
+    # no length guarantee, so truncate defensively rather than fail the
+    # whole diagram generation over a long name.
+    name = (name or "Untitled Board").strip()[:60]
     r = requests.post("https://api.miro.com/v2/boards", headers=headers,
-                       json={"name": name, "description": description}, timeout=10)
+                       json={"name": name, "description": description}, timeout=15)
     if r.status_code not in (200, 201):
+        print(f"Miro board creation failed: status={r.status_code} body={r.text[:300]!r}")
         return None, None
     data = r.json()
     return data.get("id"), data.get("viewLink")
@@ -372,7 +378,7 @@ def _miro_create_text(headers, board_id, html, x, y, width, font_size="32", colo
         "style": {"fontSize": font_size, "color": color, "textAlign": align},
         "position": {"x": x, "y": y},
         "geometry": {"width": width}
-    }, timeout=8)
+    }, timeout=15)
 
 
 def _miro_create_frame(headers, board_id, title, fill_color, x, y, width, height):
@@ -381,7 +387,7 @@ def _miro_create_frame(headers, board_id, title, fill_color, x, y, width, height
         "style": {"fillColor": fill_color},
         "position": {"x": x, "y": y},
         "geometry": {"width": width, "height": height}
-    }, timeout=8)
+    }, timeout=15)
     return r.json().get("id") if r.status_code in (200, 201) else None
 
 
@@ -395,13 +401,13 @@ def _miro_create_shape(headers, board_id, shape, content, fill, border, text_col
     }
     if parent_id:
         payload["parent"] = {"id": parent_id}
-    r = requests.post(f"https://api.miro.com/v2/boards/{board_id}/shapes", headers=headers, json=payload, timeout=8)
+    r = requests.post(f"https://api.miro.com/v2/boards/{board_id}/shapes", headers=headers, json=payload, timeout=15)
     if r.status_code not in (200, 201) and parent_id and fallback_x is not None:
         # Nested placement can be rejected if it lands outside the frame's local
         # bounds - retry once as an absolute (unparented) canvas position instead.
         payload.pop("parent", None)
         payload["position"] = {"x": fallback_x, "y": fallback_y}
-        r = requests.post(f"https://api.miro.com/v2/boards/{board_id}/shapes", headers=headers, json=payload, timeout=8)
+        r = requests.post(f"https://api.miro.com/v2/boards/{board_id}/shapes", headers=headers, json=payload, timeout=15)
     return r.json().get("id") if r.status_code in (200, 201) else None
 
 
@@ -414,7 +420,7 @@ def _miro_create_connector(headers, board_id, start_id, end_id, color, label=Non
     }
     if label:
         payload["captions"] = [{"content": label, "position": "50%"}]
-    requests.post(f"https://api.miro.com/v2/boards/{board_id}/connectors", headers=headers, json=payload, timeout=8)
+    requests.post(f"https://api.miro.com/v2/boards/{board_id}/connectors", headers=headers, json=payload, timeout=15)
 
 
 LANE_ACCENTS = ["#10b981", "#3b82f6", "#a855f7", "#f59e0b", "#ec4899"]
@@ -463,6 +469,119 @@ def _compute_flow_columns(steps):
     for sid in by_id:
         columns.setdefault(sid, 0)
     return columns, edges
+
+
+def generate_process_flow_data(req_summary):
+    """
+    Asks the LLM for a structured swimlane flow (actors, shape-typed steps,
+    decision branches) suitable for create_miro_process_flow. Shared by the
+    War Room "Generate Artifacts" pipeline and the Artifacts tab's "Ask AI"
+    box, so both produce the identical diagram shape from the identical
+    prompt - one place to maintain, not two copies that can drift apart.
+    """
+    flow_json_sys = """
+You are a UI/UX Designer and Systems/Process Analyst. Design an enterprise-grade swimlane process flow diagram for the requirement below.
+
+Output ONLY a single JSON object (no markdown, no backticks) with this exact shape:
+{
+  "lanes": ["Actor/System 1", "Actor/System 2"],
+  "steps": [
+    {"id": 1, "lane": "<one of the lanes above>", "type": "start", "title": "...", "text": "...", "next": 2},
+    {"id": 2, "lane": "...", "type": "process", "title": "...", "text": "...", "next": 3},
+    {"id": 3, "lane": "...", "type": "decision", "title": "...", "text": "...",
+     "yes_label": "Valid", "yes_next": 4, "no_label": "Invalid", "no_next": 6},
+    {"id": 4, "lane": "...", "type": "process", "title": "...", "text": "...", "next": 5},
+    {"id": 5, "lane": "...", "type": "end_success", "title": "...", "text": "..."},
+    {"id": 6, "lane": "...", "type": "end_failure", "title": "...", "text": "..."}
+  ]
+}
+Rules:
+- "lanes" must have 2-4 entries, one per distinct actor/system involved (e.g. "User", "API Gateway", "Auth Service").
+- "type" must be one of: start, process, decision, end_success, end_failure.
+- Every non-decision, non-end step must have a "next" id. Every "decision" step must have "yes_next"/"no_next" plus short "yes_label"/"no_label" (e.g. "Valid"/"Invalid", "Approved"/"Rejected").
+- Include at least one decision point and at least one failure/rejection end path - real processes branch.
+- "text" is a concise 1-2 sentence description of what happens at that step.
+- Assign each step to the lane that actually performs it, so the diagram reads as a real cross-functional swimlane flow.
+- Produce 6-12 steps total.
+"""
+    flow_raw = llm(flow_json_sys, req_summary)
+    clean_flow_json = flow_raw.replace("```json", "").replace("```", "").strip()
+    try:
+        flow_data = json.loads(clean_flow_json)
+        if not flow_data.get("steps"):
+            raise ValueError("no steps")
+    except Exception:
+        flow_data = {
+            "lanes": ["User", "Web/API Gateway", "Auth Service"],
+            "steps": [
+                {"id": 1, "lane": "User", "type": "start", "title": "Arrives at Login Page", "text": "User navigates to the login page and enters credentials.", "next": 2},
+                {"id": 2, "lane": "Web/API Gateway", "type": "process", "title": "Submit Credentials", "text": "Gateway receives the request and forwards it to the Auth Service over HTTPS.", "next": 3},
+                {"id": 3, "lane": "Auth Service", "type": "decision", "title": "Validate Credentials", "text": "Checks username/password against the identity store.", "yes_label": "Valid", "yes_next": 4, "no_label": "Invalid", "no_next": 7},
+                {"id": 4, "lane": "Auth Service", "type": "decision", "title": "Device Recognized?", "text": "Checks device fingerprint and IP reputation.", "yes_label": "Trusted", "yes_next": 6, "no_label": "New Device", "no_next": 5},
+                {"id": 5, "lane": "Auth Service", "type": "process", "title": "Send MFA Challenge", "text": "Issues a one-time passcode via SMS/authenticator app.", "next": 6},
+                {"id": 6, "lane": "User", "type": "end_success", "title": "Access Granted", "text": "Secure session established; user redirected to dashboard."},
+                {"id": 7, "lane": "User", "type": "end_failure", "title": "Access Denied", "text": "Generic error shown; failed attempt logged for audit."}
+            ]
+        }
+    return flow_data
+
+
+def generate_architecture_data(req_summary):
+    """Same purpose as generate_process_flow_data, for create_miro_architecture_diagram."""
+    arch_json_sys = """
+You are a Systems/Enterprise Architect. Design an enterprise-grade layered system architecture diagram for the requirement below.
+
+Output ONLY a single JSON object (no markdown, no backticks) with this exact shape:
+{
+  "tiers": [
+    {"name": "Presentation Tier", "components": [{"title": "...", "text": "..."}]},
+    {"name": "API / Gateway Tier", "components": [{"title": "...", "text": "..."}]},
+    {"name": "Service Tier", "components": [{"title": "...", "text": "..."}]},
+    {"name": "Data Tier", "components": [{"title": "...", "text": "..."}]}
+  ],
+  "connections": [
+    {"from_tier": 0, "from_component": 0, "to_tier": 1, "to_component": 0, "label": "HTTPS/REST"}
+  ]
+}
+Rules:
+- Produce 3-5 tiers ordered top-to-bottom the way real traffic flows (e.g. Presentation -> Gateway -> Service(s) -> Data, with a Security/Cross-cutting tier if relevant).
+- Each tier should have 1-3 concrete components (real service/component names appropriate to this requirement, not generic placeholders).
+- "text" is a concise 1-2 sentence description of that component's responsibility.
+- "connections" must reference valid 0-based tier/component indices from the "tiers" array above, and each "label" should name the protocol or data exchanged (e.g. "HTTPS/REST", "gRPC", "SQL", "Pub/Sub event").
+- Include every meaningful connection, including lateral/cross-tier calls (e.g. Service Tier <-> Security Tier), not just a straight top-to-bottom chain.
+"""
+    arch_json_raw = llm(arch_json_sys, req_summary)
+    clean_arch_json = arch_json_raw.replace("```json", "").replace("```", "").strip()
+    try:
+        arch_data = json.loads(clean_arch_json)
+        if not arch_data.get("tiers"):
+            raise ValueError("no tiers")
+    except Exception:
+        arch_data = {
+            "tiers": [
+                {"name": "Presentation Tier", "components": [
+                    {"title": "Web App (Browser)", "text": "Renders user dashboard and interfaces; initiates authentication requests."}
+                ]},
+                {"name": "API / Gateway Tier", "components": [
+                    {"title": "API Gateway", "text": "Filters traffic, handles SSL termination, and routes requests to backend services."}
+                ]},
+                {"name": "Service Tier", "components": [
+                    {"title": "Auth Microservice", "text": "Verifies credentials, checks password expiration, and manages sessions."},
+                    {"title": "MFA Engine", "text": "Orchestrates TOTP codes, device OTP checks, and push validations."}
+                ]},
+                {"name": "Data Tier", "components": [
+                    {"title": "Audit Logger & DB", "text": "Logs all events (IP, timestamp, status) to a high-availability database cluster."}
+                ]}
+            ],
+            "connections": [
+                {"from_tier": 0, "from_component": 0, "to_tier": 1, "to_component": 0, "label": "HTTPS/REST"},
+                {"from_tier": 1, "from_component": 0, "to_tier": 2, "to_component": 0, "label": "gRPC"},
+                {"from_tier": 2, "from_component": 0, "to_tier": 2, "to_component": 1, "label": "Internal call"},
+                {"from_tier": 2, "from_component": 0, "to_tier": 3, "to_component": 0, "label": "SQL/Write"},
+                {"from_tier": 2, "from_component": 1, "to_tier": 3, "to_component": 0, "label": "SQL/Write"}
+            ]
+        }
+    return arch_data
 
 
 def create_miro_process_flow(miro_token, board_name, data):
@@ -593,7 +712,8 @@ def create_miro_process_flow(miro_token, board_name, data):
             lx += 260
 
         return board_url
-    except Exception:
+    except Exception as e:
+        print(f"Miro process flow diagram generation failed: {e}")
         return MIRO_FALLBACK_BOARD_URL
 
 
@@ -697,7 +817,8 @@ def create_miro_architecture_diagram(miro_token, board_name, data):
             lx += 260
 
         return board_url
-    except Exception:
+    except Exception as e:
+        print(f"Miro architecture diagram generation failed: {e}")
         return MIRO_FALLBACK_BOARD_URL
 
 
@@ -763,7 +884,7 @@ def get_babok_index():
     if _babok_index_cache["content"] is not None:
         return _babok_index_cache["content"]
     try:
-        r = requests.get(BABOK_INDEX_URL, timeout=8)
+        r = requests.get(BABOK_INDEX_URL, timeout=15)
         if r.status_code == 200:
             _babok_index_cache["content"] = r.text
             return r.text
@@ -1024,7 +1145,7 @@ async def generate_artifacts(request: Request):
     # 4. Generate Process Flow Diagram (Miro-designed)
     if "Process Flow Diagram (Miro-designed)" in artifacts_requested:
         miro_token = os.getenv("MIRO_ACCESS_TOKEN", "eyJhbGciOiJIUzI1NiJ9.test_token")
-        
+
         # 4a. Generate Word doc contents
         flow_sys = "You are a UI/UX Designer and Systems Analyst. Generate a detailed user journey and process flow specification including touchpoints, actions, and system responses."
         flow_content = llm(flow_sys, req_summary)
@@ -1037,61 +1158,15 @@ async def generate_artifacts(request: Request):
             save_as_docx("Process Flow Diagram Specification", flow_content, docx_flow_path)
             files_list.append({"name": "Process_Flow_Diagram.docx", "url": f"/workspace/{safe_project_id}/Process_Flow_Diagram.docx", "content": flow_content})
 
-        # 4b. Parse a structured swimlane flow (actors, shape-typed steps, decision
-        # branches) for an enterprise-grade Miro diagram - not a flat step list.
-        flow_json_sys = """
-You are a UI/UX Designer and Systems/Process Analyst. Design an enterprise-grade swimlane process flow diagram for the requirement below.
-
-Output ONLY a single JSON object (no markdown, no backticks) with this exact shape:
-{
-  "lanes": ["Actor/System 1", "Actor/System 2"],
-  "steps": [
-    {"id": 1, "lane": "<one of the lanes above>", "type": "start", "title": "...", "text": "...", "next": 2},
-    {"id": 2, "lane": "...", "type": "process", "title": "...", "text": "...", "next": 3},
-    {"id": 3, "lane": "...", "type": "decision", "title": "...", "text": "...",
-     "yes_label": "Valid", "yes_next": 4, "no_label": "Invalid", "no_next": 6},
-    {"id": 4, "lane": "...", "type": "process", "title": "...", "text": "...", "next": 5},
-    {"id": 5, "lane": "...", "type": "end_success", "title": "...", "text": "..."},
-    {"id": 6, "lane": "...", "type": "end_failure", "title": "...", "text": "..."}
-  ]
-}
-Rules:
-- "lanes" must have 2-4 entries, one per distinct actor/system involved (e.g. "User", "API Gateway", "Auth Service").
-- "type" must be one of: start, process, decision, end_success, end_failure.
-- Every non-decision, non-end step must have a "next" id. Every "decision" step must have "yes_next"/"no_next" plus short "yes_label"/"no_label" (e.g. "Valid"/"Invalid", "Approved"/"Rejected").
-- Include at least one decision point and at least one failure/rejection end path - real processes branch.
-- "text" is a concise 1-2 sentence description of what happens at that step.
-- Assign each step to the lane that actually performs it, so the diagram reads as a real cross-functional swimlane flow.
-- Produce 6-12 steps total.
-"""
-        flow_raw = llm(flow_json_sys, req_summary)
-        clean_flow_json = flow_raw.replace("```json", "").replace("```", "").strip()
-        try:
-            flow_data = json.loads(clean_flow_json)
-            if not flow_data.get("steps"):
-                raise ValueError("no steps")
-        except Exception:
-            flow_data = {
-                "lanes": ["User", "Web/API Gateway", "Auth Service"],
-                "steps": [
-                    {"id": 1, "lane": "User", "type": "start", "title": "Arrives at Login Page", "text": "User navigates to the login page and enters credentials.", "next": 2},
-                    {"id": 2, "lane": "Web/API Gateway", "type": "process", "title": "Submit Credentials", "text": "Gateway receives the request and forwards it to the Auth Service over HTTPS.", "next": 3},
-                    {"id": 3, "lane": "Auth Service", "type": "decision", "title": "Validate Credentials", "text": "Checks username/password against the identity store.", "yes_label": "Valid", "yes_next": 4, "no_label": "Invalid", "no_next": 7},
-                    {"id": 4, "lane": "Auth Service", "type": "decision", "title": "Device Recognized?", "text": "Checks device fingerprint and IP reputation.", "yes_label": "Trusted", "yes_next": 6, "no_label": "New Device", "no_next": 5},
-                    {"id": 5, "lane": "Auth Service", "type": "process", "title": "Send MFA Challenge", "text": "Issues a one-time passcode via SMS/authenticator app.", "next": 6},
-                    {"id": 6, "lane": "User", "type": "end_success", "title": "Access Granted", "text": "Secure session established; user redirected to dashboard."},
-                    {"id": 7, "lane": "User", "type": "end_failure", "title": "Access Denied", "text": "Generic error shown; failed attempt logged for audit."}
-                ]
-            }
-
-        # 4c. Create the swimlane flow diagram on a Miro board
+        # 4b/4c. Structured swimlane data + the actual Miro board
+        flow_data = generate_process_flow_data(req_summary)
         miro_board_url = create_miro_process_flow(miro_token, f"{project_display_name} - Process Flow Map", flow_data)
         files_list.append({"name": "Miro Process Flow Board (Interactive)", "url": miro_board_url, "external": True})
 
     # 5. Generate System Architecture Specification (Miro-designed)
     if "System Architecture Specification (Miro-designed)" in artifacts_requested or "System Architecture Spec" in artifacts_requested:
         miro_token = os.getenv("MIRO_ACCESS_TOKEN", "eyJhbGciOiJIUzI1NiJ9.test_token")
-        
+
         arch_sys = """You are a Systems Architect. Generate a System Design and Architecture document.
 Include a valid Mermaid diagram (inside standard markdown ```mermaid blocks) representing the authentication and backend service flows.
 Make the diagram thorough and descriptive."""
@@ -1106,62 +1181,8 @@ Make the diagram thorough and descriptive."""
             save_as_docx("System Architecture Specification", arch_content, docx_arch_path)
             files_list.append({"name": "System_Architecture.docx", "url": f"/workspace/{safe_project_id}/System_Architecture.docx", "content": arch_content})
 
-        # 5b. Parse a structured layered architecture (tiers, components,
-        # labelled inter-component connections) for an enterprise Miro diagram.
-        arch_json_sys = """
-You are a Systems/Enterprise Architect. Design an enterprise-grade layered system architecture diagram for the requirement below.
-
-Output ONLY a single JSON object (no markdown, no backticks) with this exact shape:
-{
-  "tiers": [
-    {"name": "Presentation Tier", "components": [{"title": "...", "text": "..."}]},
-    {"name": "API / Gateway Tier", "components": [{"title": "...", "text": "..."}]},
-    {"name": "Service Tier", "components": [{"title": "...", "text": "..."}]},
-    {"name": "Data Tier", "components": [{"title": "...", "text": "..."}]}
-  ],
-  "connections": [
-    {"from_tier": 0, "from_component": 0, "to_tier": 1, "to_component": 0, "label": "HTTPS/REST"}
-  ]
-}
-Rules:
-- Produce 3-5 tiers ordered top-to-bottom the way real traffic flows (e.g. Presentation -> Gateway -> Service(s) -> Data, with a Security/Cross-cutting tier if relevant).
-- Each tier should have 1-3 concrete components (real service/component names appropriate to this requirement, not generic placeholders).
-- "text" is a concise 1-2 sentence description of that component's responsibility.
-- "connections" must reference valid 0-based tier/component indices from the "tiers" array above, and each "label" should name the protocol or data exchanged (e.g. "HTTPS/REST", "gRPC", "SQL", "Pub/Sub event").
-- Include every meaningful connection, including lateral/cross-tier calls (e.g. Service Tier <-> Security Tier), not just a straight top-to-bottom chain.
-"""
-        arch_json_raw = llm(arch_json_sys, req_summary)
-        clean_arch_json = arch_json_raw.replace("```json", "").replace("```", "").strip()
-        try:
-            arch_data = json.loads(clean_arch_json)
-            if not arch_data.get("tiers"):
-                raise ValueError("no tiers")
-        except Exception:
-            arch_data = {
-                "tiers": [
-                    {"name": "Presentation Tier", "components": [
-                        {"title": "Web App (Browser)", "text": "Renders user dashboard and interfaces; initiates authentication requests."}
-                    ]},
-                    {"name": "API / Gateway Tier", "components": [
-                        {"title": "API Gateway", "text": "Filters traffic, handles SSL termination, and routes requests to backend services."}
-                    ]},
-                    {"name": "Service Tier", "components": [
-                        {"title": "Auth Microservice", "text": "Verifies credentials, checks password expiration, and manages sessions."},
-                        {"title": "MFA Engine", "text": "Orchestrates TOTP codes, device OTP checks, and push validations."}
-                    ]},
-                    {"name": "Data Tier", "components": [
-                        {"title": "Audit Logger & DB", "text": "Logs all events (IP, timestamp, status) to a high-availability database cluster."}
-                    ]}
-                ],
-                "connections": [
-                    {"from_tier": 0, "from_component": 0, "to_tier": 1, "to_component": 0, "label": "HTTPS/REST"},
-                    {"from_tier": 1, "from_component": 0, "to_tier": 2, "to_component": 0, "label": "gRPC"},
-                    {"from_tier": 2, "from_component": 0, "to_tier": 2, "to_component": 1, "label": "Internal call"},
-                    {"from_tier": 2, "from_component": 0, "to_tier": 3, "to_component": 0, "label": "SQL/Write"},
-                    {"from_tier": 2, "from_component": 1, "to_tier": 3, "to_component": 0, "label": "SQL/Write"}
-                ]
-            }
-
+        # 5b/5c. Structured layered-architecture data + the actual Miro board
+        arch_data = generate_architecture_data(req_summary)
         miro_arch_url = create_miro_architecture_diagram(miro_token, f"{project_display_name} - System Architecture Map", arch_data)
         files_list.append({"name": "Miro System Architecture Board (Interactive)", "url": miro_arch_url, "external": True})
 
@@ -1355,7 +1376,7 @@ async def artifacts_quick_update(request: Request):
     existing_docs = [a for a in existing_artifacts if a.get("content") and not a.get("is_external")]
 
     decide_sys = f"""
-You are a documentation assistant for a Business Analysis workspace. The user will ask you to CREATE a new document or UPDATE an existing one - never Jira work items, never diagrams/boards.
+You are an assistant for a Business Analysis workspace's Artifacts tab. The user will ask you to CREATE a new document, UPDATE an existing one, or generate a MIRO DIAGRAM (a live interactive board, not a text document).
 
 Existing documents in this project:
 {json.dumps([{"name": a["name"]} for a in existing_docs], indent=2) if existing_docs else "(none yet)"}
@@ -1364,7 +1385,13 @@ Output ONLY a JSON object (no markdown, no backticks):
 {{"action": "update", "target_name": "<exact name copied from the list above>", "title": "<short display title>"}}
 or
 {{"action": "create", "title": "<short display title for the new document>"}}
+or
+{{"action": "miro", "diagram_type": "process_flow", "title": "<short display title>"}}
+or
+{{"action": "miro", "diagram_type": "architecture", "title": "<short display title>"}}
 Rules:
+- Use "miro" whenever the request asks for a diagram, flowchart, process flow, user journey, swimlane, system architecture, system design, tech stack, or infrastructure diagram - these are boards, never text documents.
+  - "diagram_type" is "process_flow" for a process/user-journey/flowchart request, "architecture" for a system architecture/design/tech-stack/infrastructure request.
 - Use "update" only when the request clearly targets a document already in the list (by name or obvious topic match). "target_name" MUST be copied exactly from the list, unchanged.
 - Otherwise use "create".
 """
@@ -1374,13 +1401,36 @@ Rules:
         decision = json.loads(clean)
         action = decision.get("action")
         title = (decision.get("title") or "New Document").strip()
-        if action not in ("update", "create"):
+        if action not in ("update", "create", "miro"):
             raise ValueError("bad action")
     except Exception:
-        return JSONResponse({"error": "Could not understand that request - try rephrasing, e.g. \"Update the BRD to include...\" or \"Create a Data Migration Plan document\"."}, status_code=422)
+        return JSONResponse({"error": "Could not understand that request - try rephrasing, e.g. \"Update the BRD to include...\", \"Create a Data Migration Plan document\", or \"Create a process flow diagram for...\"."}, status_code=422)
 
     kb_context = build_kb_context(project.get("knowledge_items", []))
     project_dir, safe_project_id = get_project_dir(project_id)
+
+    if action == "miro":
+        diagram_type = decision.get("diagram_type") if decision.get("diagram_type") in ("process_flow", "architecture") else "process_flow"
+        miro_token = os.getenv("MIRO_ACCESS_TOKEN", "eyJhbGciOiJIUzI1NiJ9.test_token")
+        diagram_req_summary = f"{kb_context}\n\nDIAGRAM REQUEST:\n{message}"
+        project_name = project.get("name") or "Project"
+        if diagram_type == "architecture":
+            diagram_data = generate_architecture_data(diagram_req_summary)
+            board_url = create_miro_architecture_diagram(miro_token, f"{project_name} - {title}", diagram_data)
+            board_name = "Miro System Architecture Board (Interactive)"
+        else:
+            diagram_data = generate_process_flow_data(diagram_req_summary)
+            board_url = create_miro_process_flow(miro_token, f"{project_name} - {title}", diagram_data)
+            board_name = "Miro Process Flow Board (Interactive)"
+
+        merged_by_name = {
+            a["name"]: {"name": a["name"], "url": a["url"], "content": a.get("content"), "external": bool(a.get("is_external"))}
+            for a in existing_artifacts
+        }
+        test_script_names = {a["name"] for a in existing_artifacts if a.get("is_test_script")}
+        merged_by_name[board_name] = {"name": board_name, "url": board_url, "content": None, "external": True}
+        db.replace_artifacts(project_id, list(merged_by_name.values()), test_script_names)
+        return JSONResponse({"success": True, "action": "miro", "name": board_name, "url": board_url, "files": list(merged_by_name.values())})
 
     if action == "update":
         target = next((a for a in existing_docs if a["name"] == decision.get("target_name")), None)
