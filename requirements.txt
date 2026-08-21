@@ -9,3 +9,4 @@ uvicorn
 python-docx
 python-multipart
 pypdf
+google-generativeai

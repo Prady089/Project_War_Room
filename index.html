@@ -22,37 +22,99 @@
             --emerald-bg: #f0fdf4;
             --emerald-border: #bbf7d0;
             --emerald-text: #166534;
+
+            /* Glassmorphism palette - frosted-glass surfaces over an ambient
+               gradient backdrop. Alpha values are tuned to stay legible for
+               dense tables (RTM/Change Log), not just hero cards. */
+            --glass-bg: rgba(255, 255, 255, 0.5);
+            --glass-bg-soft: rgba(248, 250, 252, 0.4);
+            --glass-border: rgba(255, 255, 255, 0.8);
+            --glass-border-soft: rgba(148, 163, 184, 0.28);
+            --glass-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 8px 32px -8px rgba(15, 23, 42, 0.16), 0 1px 2px rgba(15, 23, 42, 0.05);
+            --glass-dark-bg: rgba(15, 23, 42, 0.75);
+            --glass-dark-bg-hover: rgba(15, 23, 42, 0.9);
         }
         body {
-            background-color: var(--obsidian);
             color: var(--text-main);
+            background-color: #eef2ff;
+            background-image:
+                radial-gradient(at 12% 18%, rgba(99, 102, 241, 0.32) 0px, transparent 50%),
+                radial-gradient(at 88% 12%, rgba(236, 72, 153, 0.24) 0px, transparent 50%),
+                radial-gradient(at 45% 90%, rgba(16, 185, 129, 0.26) 0px, transparent 50%),
+                radial-gradient(at 92% 82%, rgba(37, 99, 235, 0.28) 0px, transparent 50%),
+                radial-gradient(at 8% 75%, rgba(245, 158, 11, 0.18) 0px, transparent 45%),
+                linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+            background-attachment: fixed;
+            background-size: cover;
         }
         .sidebar-border {
-            border-right: 1px solid var(--border);
+            border-right: 1px solid var(--glass-border-soft);
         }
         .header-border {
-            border-bottom: 1px solid var(--border);
+            border-bottom: 1px solid var(--glass-border-soft);
         }
         .glass-panel {
-            background: #ffffff;
-            border: 1px solid var(--border);
-            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            box-shadow: var(--glass-shadow);
+            backdrop-filter: blur(20px) saturate(160%);
+            -webkit-backdrop-filter: blur(20px) saturate(160%);
         }
         .glass-card {
-            background: #ffffff;
-            border: 1px solid var(--border);
-            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            box-shadow: var(--glass-shadow);
+            backdrop-filter: blur(20px) saturate(160%);
+            -webkit-backdrop-filter: blur(20px) saturate(160%);
             transition: all 0.2s ease;
         }
         .glass-card:hover {
-            background: var(--slate-base);
-            border-color: #cbd5e1;
+            background: rgba(255, 255, 255, 0.75);
+            border-color: rgba(255, 255, 255, 0.85);
             transform: translateY(-1px);
-            box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.08);
+            box-shadow: 0 12px 36px -6px rgba(15, 23, 42, 0.18);
+        }
+
+        /* ---- Global glassmorphic reskin ----
+           This app is built almost entirely from a handful of repeated
+           Tailwind utility classes (bg-white, bg-slate-50, bg-slate-900,
+           border-slate-100/200, shadow-sm) across every tab's JS-generated
+           markup - so overriding those classes directly (with !important,
+           since the Tailwind CDN script injects its own stylesheet and load
+           order isn't guaranteed) reskins the whole app from one place
+           instead of touching hundreds of scattered template strings.
+           Semantic status colors (bg-emerald-500, bg-rose-500, the *-50
+           badge tints, etc.) are deliberately left alone so charts and
+           status pills stay crisp and readable. */
+        .bg-white {
+            background-color: var(--glass-bg) !important;
+            backdrop-filter: blur(24px) saturate(180%);
+            -webkit-backdrop-filter: blur(24px) saturate(180%);
+        }
+        .bg-slate-50 {
+            background-color: var(--glass-bg-soft) !important;
+            backdrop-filter: blur(16px) saturate(160%);
+            -webkit-backdrop-filter: blur(16px) saturate(160%);
+        }
+        .bg-slate-900 {
+            background-color: var(--glass-dark-bg) !important;
+            backdrop-filter: blur(18px) saturate(180%);
+            -webkit-backdrop-filter: blur(18px) saturate(180%);
+        }
+        .hover\:bg-slate-800:hover,
+        .hover\:bg-slate-850:hover {
+            background-color: var(--glass-dark-bg-hover) !important;
+        }
+        .border-slate-100, .border-slate-200 {
+            border-color: var(--glass-border-soft) !important;
+        }
+        .shadow-sm {
+            box-shadow: var(--glass-shadow) !important;
         }
         #createProjectModal, #artifactViewModal, #parentPickerModal {
-            background: rgba(15, 23, 42, 0.3);
-            backdrop-filter: blur(4px);
+            background: rgba(15, 23, 42, 0.35);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
             opacity: 0;
             pointer-events: none;
             transition: opacity 0.2s ease;
@@ -108,7 +170,7 @@
         }
     </style>
 </head>
-<body class="text-slate-800 font-['Outfit'] h-screen flex flex-col overflow-hidden bg-slate-50">
+<body class="text-slate-800 font-['Outfit'] h-screen flex flex-col overflow-hidden">
 
     <!-- TOP HEADER -->
     <header class="header-border h-16 flex items-center justify-between px-8 bg-white shrink-0">
@@ -122,7 +184,6 @@
             </div>
         </div>
         <div class="flex items-center gap-6 text-xs text-slate-600">
-            <div id="jiraStatus" class="flex items-center gap-1.5"></div>
             <div class="w-8 h-8 rounded-full border border-slate-200 bg-slate-100 flex items-center justify-center overflow-hidden">
                 <span class="material-symbols-outlined text-slate-500 text-sm">person</span>
             </div>
@@ -680,7 +741,6 @@
             window.vaultFiles = proj.artifacts.map(a => ({ name: a.name, url: a.url, content: a.content, external: !!a.is_external }));
             window.testScripts = proj.artifacts.filter(a => a.is_test_script).map(a => ({ name: a.name, url: a.url, content: a.content }));
             window.workItems = proj.work_items || [];
-            window.confluenceSynced = proj.confluence_synced.map(c => ({ name: c.name, url: c.url }));
             window.agentContributions = proj.agent_contributions.map(a => ({ agent: a.agent_name, text: a.text }));
             window.selectedDocs = [];
             window.activeAgentsToRun = [];
@@ -1017,8 +1077,6 @@
                             <span class="material-symbols-outlined text-indigo-400 text-2xl">cloud_upload</span>
                             <p class="text-[10px] text-indigo-600 font-semibold leading-relaxed">Drag a document here to publish it to Confluence</p>
                         </div>
-                        <div id="confluenceSyncedList" class="space-y-2"></div>
-
                         <div class="pt-3 border-t border-slate-200 space-y-2">
                             <div class="flex items-center justify-between">
                                 <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Live in Confluence</div>
@@ -1150,7 +1208,6 @@
                 loadChangeLog();
             }
             if (tabName === 'vault') {
-                renderConfluenceSyncedList();
                 loadConfluenceLivePages();
             }
         }
@@ -2482,20 +2539,16 @@
         }
 
         async function fetchJiraStatus(projectId) {
-            const el = document.getElementById('jiraStatus');
+            // No header indicator anymore - this just resolves window.jiraBaseUrl,
+            // which "open in Jira" links throughout the app depend on.
             try {
                 const url = projectId ? `/jira/status?project_id=${encodeURIComponent(projectId)}` : '/jira/status';
                 const r = await fetch(url);
                 const d = await r.json();
                 if (d.connected) {
                     window.jiraBaseUrl = d.jira_url;
-                    el.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><span class="text-slate-500 font-medium">Jira Connected (${d.project})</span>`;
-                } else {
-                    el.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-rose-400"></span><span class="text-slate-400 font-medium">Jira Offline</span>`;
                 }
-            } catch(e) {
-                el.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-rose-400"></span><span class="text-slate-400 font-medium">Jira Link Error</span>`;
-            }
+            } catch (e) {}
         }
 
         // Save a Miro board's link (not its content) as a Confluence page
@@ -2517,9 +2570,7 @@
                     btn.innerHTML = originalHtml;
                     return;
                 }
-                window.confluenceSynced = window.confluenceSynced || [];
-                window.confluenceSynced.unshift({ name: data.title, url: data.url });
-                renderConfluenceSyncedList();
+                loadConfluenceLivePages();
                 btn.className = "px-3 py-1 rounded bg-emerald-50 border border-emerald-200 text-emerald-700 text-[9px] font-bold uppercase tracking-wider flex items-center gap-1";
                 btn.innerHTML = 'Synced <span class="material-symbols-outlined text-[10px]">check</span>';
                 setTimeout(() => {
@@ -2553,9 +2604,7 @@
                 if (data.success) {
                     btn.className = "px-3 py-1 rounded bg-emerald-50 border border-emerald-200 text-emerald-700 text-[9px] font-bold uppercase tracking-wider flex items-center gap-1";
                     btn.innerHTML = 'Saved <span class="material-symbols-outlined text-[10px]">check</span>';
-                    window.confluenceSynced = window.confluenceSynced || [];
-                    window.confluenceSynced.unshift({ name: boardName, url: data.url });
-                    renderConfluenceSyncedList();
+                    loadConfluenceLivePages();
                 } else {
                     alert("Confluence publish failed: " + (data.error || "Unknown error"));
                     btn.disabled = false;
@@ -2735,8 +2784,6 @@
         }
 
         // Drag-and-drop artifact -> Confluence sync
-        window.confluenceSynced = window.confluenceSynced || [];
-
         function handleArtifactDragStart(e, idx) {
             e.dataTransfer.setData('text/plain', String(idx));
             e.dataTransfer.effectAllowed = 'copy';
@@ -2777,8 +2824,7 @@
                 });
                 const data = await response.json();
                 if (data.success) {
-                    window.confluenceSynced.unshift({ name: f.name, url: data.url });
-                    renderConfluenceSyncedList();
+                    loadConfluenceLivePages();
                 } else {
                     alert("Confluence publish failed: " + (data.error || "Unknown error"));
                 }
@@ -2789,21 +2835,7 @@
             }
         }
 
-        function renderConfluenceSyncedList() {
-            const list = document.getElementById('confluenceSyncedList');
-            if (!list) return;
-            const items = window.confluenceSynced || [];
-            list.innerHTML = items.map(it => `
-                <a href="${it.url}" target="_blank" class="flex items-center gap-2 p-2.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 transition-all text-[11px] text-slate-700">
-                    <span class="material-symbols-outlined text-emerald-500 text-sm">check_circle</span>
-                    <span class="truncate flex-1">${it.name}</span>
-                    <span class="material-symbols-outlined text-slate-400 text-xs">open_in_new</span>
-                </a>
-            `).join('');
-        }
-
         // Live query of what pages actually exist right now in the Confluence space
-        // (distinct from confluenceSyncedList, which only tracks what this session pushed)
         async function loadConfluenceLivePages() {
             const list = document.getElementById('confluenceLivePagesList');
             if (!list) return;
