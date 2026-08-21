@@ -111,7 +111,13 @@ async def api_add_knowledge_item(project_id: str, request: Request):
     content = (body.get("content") or "").strip()
     if not title or not content:
         return JSONResponse({"error": "Title and content are required"}, status_code=400)
-    db.add_knowledge_item(project_id, title, content, body.get("type", "Manual Instruction"))
+    item_id = db.add_knowledge_item(project_id, title, content, body.get("type", "Manual Instruction"))
+    return JSONResponse({"success": True, "id": item_id})
+
+
+@app.delete("/api/projects/{project_id}/knowledge/{item_id}")
+async def api_delete_knowledge_item(project_id: str, item_id: int):
+    db.delete_knowledge_item(item_id)
     return JSONResponse({"success": True})
 
 
@@ -150,8 +156,8 @@ async def api_upload_knowledge_file(project_id: str, file: UploadFile = File(...
         text = text[:KNOWLEDGE_UPLOAD_MAX_CHARS] + "\n\n[...truncated...]"
 
     title = os.path.splitext(filename)[0]
-    db.add_knowledge_item(project_id, title, text, "Uploaded Document")
-    return JSONResponse({"success": True, "item": {"title": title, "content": text, "type": "Uploaded Document"}, "truncated": truncated})
+    item_id = db.add_knowledge_item(project_id, title, text, "Uploaded Document")
+    return JSONResponse({"success": True, "item": {"id": item_id, "title": title, "content": text, "type": "Uploaded Document"}, "truncated": truncated})
 
 # ============================================================
 # JIRA CONFIGURATION

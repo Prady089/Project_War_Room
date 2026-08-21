@@ -667,9 +667,14 @@
             const itemsHtml = kbList.length > 0
                 ? kbList.map(k => `
                     <div class="p-2 rounded-lg bg-slate-50 border border-slate-200 space-y-0.5">
-                        <div class="flex items-center justify-between text-[9px] font-bold text-slate-800">
+                        <div class="flex items-center justify-between text-[9px] font-bold text-slate-800 gap-1">
                             <span class="truncate">${escapeHtml(k.title)}</span>
-                            <span class="text-slate-400 font-mono font-medium shrink-0 ml-1">${escapeHtml(k.type)}</span>
+                            <div class="flex items-center gap-1 shrink-0">
+                                <span class="text-slate-400 font-mono font-medium">${escapeHtml(k.type)}</span>
+                                ${k.id ? `<button onclick="deleteKnowledgeItem(${k.id}, this)" class="w-4 h-4 rounded flex items-center justify-center text-rose-400 hover:text-rose-600 hover:bg-rose-50 transition-all" title="Delete">
+                                    <span class="material-symbols-outlined text-[11px]">delete</span>
+                                </button>` : ''}
+                            </div>
                         </div>
                         <p class="text-[10px] text-slate-600 leading-snug line-clamp-2">${escapeHtml(k.content)}</p>
                     </div>
@@ -731,7 +736,7 @@
                 desc: proj.description,
                 jiraProjectKey: proj.jira_project_key,
                 confluenceSpaceKey: proj.confluence_space_key,
-                knowledgeItems: proj.knowledge_items.map(k => ({ title: k.title, content: k.content, type: k.type }))
+                knowledgeItems: proj.knowledge_items.map(k => ({ id: k.id, title: k.title, content: k.content, type: k.type }))
             };
 
             fetchJiraStatus(proj.id);
@@ -2892,6 +2897,7 @@
                 return;
             }
 
+            let newId;
             try {
                 const response = await fetch(`/api/projects/${activeProject.id}/knowledge`, {
                     method: 'POST',
@@ -2903,6 +2909,7 @@
                     alert("Failed to save: " + (data.error || "Unknown error"));
                     return;
                 }
+                newId = data.id;
             } catch (e) {
                 alert("Network error: " + e.message);
                 return;
@@ -2911,8 +2918,26 @@
             if (!activeProject.knowledgeItems) {
                 activeProject.knowledgeItems = [];
             }
-            activeProject.knowledgeItems.push({ title, content, type: "Manual Instruction" });
+            activeProject.knowledgeItems.push({ id: newId, title, content, type: "Manual Instruction" });
+            document.getElementById('kbTitleInput').value = '';
+            document.getElementById('kbContentInput').value = '';
             renderKnowledgeBasePanel();
+        }
+
+        async function deleteKnowledgeItem(id, btn) {
+            if (!confirm('Delete this reference from the knowledge base? This cannot be undone.')) return;
+            try {
+                const response = await fetch(`/api/projects/${activeProject.id}/knowledge/${id}`, { method: 'DELETE' });
+                const data = await response.json();
+                if (!data.success) {
+                    alert('Delete failed: ' + (data.error || 'Unknown error'));
+                    return;
+                }
+                activeProject.knowledgeItems = (activeProject.knowledgeItems || []).filter(k => k.id !== id);
+                renderKnowledgeBasePanel();
+            } catch (e) {
+                alert('Network error: ' + e.message);
+            }
         }
 
         async function uploadKnowledgeFile(btn) {

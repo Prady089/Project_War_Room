@@ -262,13 +262,25 @@ def add_agent_contribution(project_id, agent_name, text):
 
 def add_knowledge_item(project_id, title, content, item_type):
     conn = get_conn()
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO knowledge_items (project_id, title, content, type, created_at) VALUES (?, ?, ?, ?, ?)",
         (project_id, title, content, item_type, _now()),
     )
+    new_id = cur.lastrowid
     conn.commit()
     conn.close()
     touch_project(project_id)
+    return new_id
+
+
+def delete_knowledge_item(item_id):
+    conn = get_conn()
+    row = conn.execute("SELECT project_id FROM knowledge_items WHERE id = ?", (item_id,)).fetchone()
+    conn.execute("DELETE FROM knowledge_items WHERE id = ?", (item_id,))
+    conn.commit()
+    conn.close()
+    if row:
+        touch_project(row["project_id"])
 
 
 # ============================================================
