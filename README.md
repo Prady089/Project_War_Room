@@ -1,166 +1,72 @@
-# Project War Room: High-Agency Software Synthesis Factory
+# Project War Room
 
-![Project War Room Architecture]
-Project War Room is a state-of-the-art, multi-agent AI framework designed to bridge the gap between human requirements and production-ready software. By orchestrating a fleet of specialized neural agents, Project War Room automates the entire Software Development Life Cycle (SDLC) in real-time.
+An AI-powered Business Analyst & Project Management workspace. Describe a requirement in plain English and Project War Room carries it through the rest of the delivery lifecycle: requirements documentation, a Jira work breakdown, traceable test coverage, change management, and stakeholder-ready reporting — grounded in BABOK v3 technique references throughout.
 
+It's built for BA/PM-style workflows on real projects (the included sample projects are retail banking scenarios — deposit product rate management, teller account opening, an online banking redesign), not a generic code generator.
 
-In this example, Agents are asked to create simple calcaulator web application.
-<img width="1919" height="868" alt="image" src="https://github.com/user-attachments/assets/92381d24-edf0-4b58-9f43-9f3e556acdab" />
+## Screenshots
 
-Conversation / work handoff between agent
+| | |
+|---|---|
+| ![Home](docs/screenshots/home.png) | ![Dashboard](docs/screenshots/dashboard.png) |
+| ![Jira Sync](docs/screenshots/jira-sync.png) | ![RTM / Trace Matrix](docs/screenshots/rtm.png) |
 
-USER INTENT
-Create a calculator web application
+## What it does
 
-PROJECT WAR ROOM
-📁 Project workspace created: workspace/Create_a_calculator_web_application/
+- **War Room chat** — describe a requirement to an AI Business Analyst; it asks clarifying questions and drives what gets generated next.
+- **Document generation** — Business Requirements Document, Functional Requirements Spec, Use Case Specification, Process Flow diagram, System Architecture spec, and a User Story Map & Sprint Backlog, all authored from the conversation plus anything pinned in the project's Knowledge Base.
+- **Jira Sync** — draft an Epic → Story/Task → Subtask hierarchy locally, then push it to a real Jira Cloud/Data Center project. Pushing is hierarchy-aware (parents resolved automatically) and every item's Draft/Live state is tracked.
+- **RTM / Trace Matrix** — generate AI-authored, Jira-traceable test cases per Story/Task, push them individually to Jira as linked Subtasks, and track requirement coverage and pass/fail status live.
+- **Change Log** — a Change Request Register for scope changes, distinguishing changes raised during the build from post-go-live amendments, each optionally linked back to the requirement it affects.
+- **Dashboard** — live KPIs (requirements, Jira sync rate, test coverage, test pass rate, change requests, Confluence pages published, live Jira status) plus breakdown charts.
+- **Confluence integration** — publish any generated document to Confluence, or sync a live report (Jira tasks, RTM, Change Log) as a Confluence page that's updated in place on every re-sync instead of duplicating.
+- **Miro integration** — auto-generated swimlane process-flow and layered system-architecture diagrams, kept live in Miro (not static images).
+- **Knowledge Base** — pin reference documents (uploaded files or pasted notes) that ground every AI generation call for a project.
+- **Reporting** — one-click CSV export of live Jira tasks, the RTM, and the Change Log.
 
-BUSINESS ANALYST
-Request received.
-BRD summary:
-- Develop a web-based calculator application.
-- Ensure the application supports basic arithmetic operations: addition, subtraction, multiplication, and division.
-- Design a user-friendly interface for both desktop and mobile devices.
-Next: System Architect to design the system.
-description
-business_requirements.md
+## Tech stack
 
-SYSTEM ARCHITECT
-Architecture complete.
-Design summary:
-- **Decision 1**: Use a single-page application (SPA) framework, such as React.js, to ensure a responsive and dynamic user interface.
-- **Decision 2**: Implement a client-side logic for arithmetic operations to reduce server load and improve performance.
-- **Decision 3**: Employ CSS media queries and a flexible grid layout to achieve a responsive design compatible with various devices.
-Next: Developer to implement the build.
-description
-architecture_design.md
+- **Backend**: FastAPI (Python), SQLite for persistence
+- **AI**: OpenAI (model configurable via `OPENAI_MODEL`)
+- **Frontend**: a single-page vanilla JS + Tailwind CSS app — no build step, no framework
+- **Integrations**: Jira Cloud/Data Center REST API, Confluence REST API, Miro REST API
 
-DEVELOPER
-Build shipped.
-Implementation summary:
-- index.html: Basic structure with buttons for digits and operations, and a display area.
-- style.css: Dark theme with CSS variables for colors, responsive layout using flexbox.
-- script.js: Handles arithmetic operations and updates display; checks for division by zero.
-description
-index.html
-description
-style.css
-description
-script.js
-
-QA ENGINEER
-Audit complete.
-Findings:
-- Issue 1: The calculator does not handle decimal numbers, which limits its functionality for more precise calculations.
-- Issue 2: There is no validation for consecutive operators, potentially causing logical errors in calculations.
-- Issue 3: The CSS lacks focus styles for accessibility, which is necessary for keyboard navigation users.
-Verdict: Needs Revision.
-Next: Developer to revise.
-description
-qa_audit.md
-
-QA ROUTER
-Revision required. Issues to fix:
-- Issue 1: The calculator does not handle decimal numbers, which limits its functionality for more precise calculations.
-- Issue 2: There is no validation for consecutive operators, potentially causing logical errors in calculations.
-- Issue 3: The CSS lacks focus styles for accessibility, which is necessary for keyboard navigation users.
-
-DEVELOPER
-Revision applied and resubmitted.
-Implementation summary:
-- index.html: Added a decimal point button.
-- style.css: Added focus styles for accessibility.
-- script.js: Added support for decimal numbers and validation for consecutive operators.
-Next: QA to audit.
-description
-index.html
-description
-style.css
-description
-script.js
-
-QA ENGINEER
-Audit complete.
-Findings:
-- Issue 1: None
-- Issue 2: None
-- Issue 3: None
-Verdict: Approved.
-Next: Proceed with deployment.
-description
-qa_audit.md
-RELEASE MANAGER
-Release complete
-Project: Create_a_calculator_web_application
-Location: workspace/Create_a_calculator_web_application/
-Revisions completed: 1
-Preview ready in the right panel.
-
-
-
-
-## 🌌 The Vision
-Unlike traditional LLM wrappers, **Project War Room** operates as a high-agency "factory." It doesn't just answer questions; it **synthesizes artifacts**. From requirements gathering to architectural design and final QA auditing, every step is handled by a specialized agent working in a synchronized neural loop.
-
-## 🤖 The Neural Fleet
-The interface features a proprietary "Zig-Zag" formation that represents the logical flow of a professional software agency:
-
-| Agent | Icon | Responsibility |
-| :--- | :---: | :--- |
-| **Planner** | 🧠 | Analyzes intent, maps objectives, and orchestrates the neural pathway. |
-| **BA** | 📐 | Business Analyst: Extracts constraints, defines features, and creates the SRS. |
-| **Architect** | 🕸️ | System Architect: Designs folder structures, tech stacks, and modular logic. |
-| **Developer** | 🧶 | The Weaver: Synthesizes clean, high-performance source code into live artifacts. |
-| **QA** | 🛡️ | Sentry: Audits logic, performs edge-case validation, and signs off on the build. |
-
-## 🚀 Key Features
-*   **Cyber-Organic Workspace**: A premium glassmorphic UI featuring active-node lighting and fluid circular animations.
-*   **Live Projection Tile**: A localized "holographic" preview area that renders build artifacts (HTML/CSS/JS) the moment they are generated.
-*   **Multi-Agent Context Flow**: Agents "communicate" through an internal history stream, allowing for complex, multi-file software projects.
-*   **Refinement Loop**: Iteratively refine your software by chatting directly with the fleet—agents adapt existing code based on new feedback.
-*   **Artifact-Centric**: Every agent output is a real file saved to your workspace, ensuring the factory produces tangible value.
-
-## 🛠 Technical Architecture
-*   **Model**: Powered by **Google Gemini 2.0 Flash** (Model of choice for speed and high-context reasoning).
-*   **Backend**: A high-performance **FastAPI** hub managing synchronized event streams.
-*   **UI/UX**: **Gradio** for logic orchestration combined with a custom **Tailwind CSS** frontend for a futuristic aesthetic.
-*   **Design System**: Utilizes **Orbitron**, **Outfit**, and **Fira Code** for a futuristic, developer-focused experience.
-
-## ⚡ Setup & Execution
+## Getting started
 
 ### Prerequisites
-*   Python 3.10+
-*   Google Gemini API Key
+
+- Python 3.10+
+- An OpenAI API key
+- Optional, to use the integrations: Jira Cloud/Data Center credentials, a Miro access token
 
 ### Installation
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/Prady089/Project_War_Room.git
-   cd Project_War_Room
-   ```
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Configure your API key in `server.py` and `app.py`.
 
-### Running the Factory
-The system requires two processes:
-1.  **Launch the Backend Core**:
-    ```bash
-    python server.py
-    ```
-2.  **Launch the Synthesis Interface**:
-    ```bash
-    python app.py
-    ```
-3.  **Access the Hub**:
-    *   **Project War Room Hub**: `http://localhost:8003`
-    *   **Internal Synthesis Engine**: `http://127.0.0.1:7860`
+```bash
+git clone https://github.com/Prady089/Project_War_Room.git
+cd Project_War_Room
+pip install -r requirements.txt
+cp .env.example .env   # then fill in your real values
+python server.py
+```
 
-## 👨‍💻 Author
+Open **http://localhost:8003**.
+
+### Environment variables
+
+See [`.env.example`](.env.example) for the full, commented list. In short:
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `OPENAI_API_KEY`, `OPENAI_MODEL` | Yes | Powers all document/test-case generation |
+| `JIRA_URL`, `JIRA_USERNAME`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY` | For Jira/Confluence features | Jira Cloud credentials (use `JIRA_PERSONAL_TOKEN` instead of username/token for Data Center/Server) |
+| `MIRO_ACCESS_TOKEN` | For Miro diagrams | Miro app access token |
+| `DATA_DIR` | No | Where `nexus.db` and generated files live. Leave unset for local dev; set it to a mounted persistent disk's path when deploying somewhere with an ephemeral filesystem (see below) |
+
+## Deploying
+
+The app is a single long-lived Python process — it runs anywhere that can host that (Render, Railway, a VM, etc.). It persists to a local SQLite file and a local folder of generated documents, so on a host with an **ephemeral filesystem** (e.g. Render without a persistent disk attached), every redeploy or idle spin-down wipes that data. Mount a persistent disk and point `DATA_DIR` at it to avoid that.
+
+## Author
+
 **Pradeep Kumar**
-[LinkedIn Profile](https://www.linkedin.com/in/prady089/)
-
----
-*Project War Room - Orchestrating the future of agentic development.*
+[LinkedIn](https://www.linkedin.com/in/prady089/)
