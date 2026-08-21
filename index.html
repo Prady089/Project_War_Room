@@ -890,7 +890,7 @@
                 label = "DASHBOARD";
                 desc = "Project health at a glance - work breakdown, Jira sync, and test coverage";
                 htmlContent = `
-                    <div id="dashboardKpiRow" class="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3">
+                    <div id="dashboardKpiRow" class="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <div class="col-span-full text-center py-6 text-[10px] text-slate-400">Loading dashboard...</div>
                     </div>
                     <div id="dashboardCharts" class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4"></div>
@@ -902,6 +902,17 @@
                 const workItems = window.workItems || [];
                 const flatItems = flattenWorkItems(workItems, []);
                 const draftCount = flatItems.filter(n => !n.jira_key).length;
+                const liveCount = flatItems.length - draftCount;
+                const jiraSyncRate = flatItems.length ? Math.round((liveCount / flatItems.length) * 1000) / 10 : 0;
+
+                const jiraSyncKpiRowHtml = `
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        ${kpiTile('view_kanban', 'Total Work Items', flatItems.length, `${flatItems.filter(n => n.issuetype === 'Epic').length} epic(s)`)}
+                        ${kpiTile('edit_note', 'Draft', draftCount, 'not yet pushed')}
+                        ${kpiTile('cloud_done', 'Live in Jira', liveCount, 'synced')}
+                        ${kpiTile('sync', 'Sync Rate', `${jiraSyncRate}%`, `${liveCount} of ${flatItems.length}`, jiraSyncRate, 'bg-blue-500')}
+                    </div>
+                `;
 
                 const jiraSyncPaneHtml = `
                     <div class="w-[420px] shrink-0 space-y-2 sticky top-0">
@@ -931,6 +942,7 @@
                 htmlContent = `
                     <div class="flex gap-6 items-start">
                         <div class="flex-1 min-w-0 space-y-3">
+                            ${jiraSyncKpiRowHtml}
                             <div class="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200 focus-within:border-slate-400 transition-colors">
                                 <span class="material-symbols-outlined text-slate-400 text-base shrink-0">auto_awesome</span>
                                 <input id="quickCreateInput" placeholder="Ask AI to add a story or task... e.g. &quot;Create a story for forgot password under EP002&quot;" class="flex-1 min-w-0 bg-transparent text-xs text-slate-800 placeholder-slate-400 outline-none" onkeydown="if(event.key==='Enter') quickCreateWorkItems(document.getElementById('quickCreateBtn'))">
@@ -988,10 +1000,13 @@
                 htmlContent = `
                     <div class="space-y-4">
                         <div class="flex items-center justify-between">
-                            <div id="rtmSummaryStats" class="flex items-center gap-4 text-[10px] text-slate-400">Loading coverage...</div>
+                            <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Quick Coverage View</div>
                             <button onclick="loadRtmMatrix()" class="text-slate-400 hover:text-slate-700 transition-colors" title="Refresh live Jira status">
                                 <span class="material-symbols-outlined text-sm">refresh</span>
                             </button>
+                        </div>
+                        <div id="rtmKpiRow" class="grid grid-cols-2 md:grid-cols-5 gap-3">
+                            <div class="col-span-full text-[10px] text-slate-400 text-center py-2">Loading coverage...</div>
                         </div>
                         <div id="rtmTableContainer" class="border border-slate-200 rounded-xl overflow-x-auto">
                             <div class="text-[10px] text-slate-400 text-center py-8">Loading trace matrix...</div>
@@ -1157,6 +1172,11 @@
                     htmlContent = `
                         <div class="flex gap-6 items-start">
                             <div class="flex-1 min-w-0 space-y-4">
+                                <div class="grid grid-cols-3 gap-3">
+                                    ${kpiTile('description', 'Documents', specFiles.length, 'in the Specifications Vault')}
+                                    ${kpiTile('dashboard', 'Miro Boards', externalLinks.length, 'interactive diagrams')}
+                                    ${kpiTile('cloud_done', 'Confluence Pages', '<span id="artifactsConfluenceLiveCount">—</span>', 'live in Confluence')}
+                                </div>
                                 <div class="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200 focus-within:border-slate-400 transition-colors">
                                     <span class="material-symbols-outlined text-slate-400 text-base shrink-0">auto_awesome</span>
                                     <input id="artifactAskAiInput" placeholder="Ask AI to create or update a document... e.g. &quot;Update the BRD to include fraud detection requirements&quot;" class="flex-1 min-w-0 bg-transparent text-xs text-slate-800 placeholder-slate-400 outline-none" onkeydown="if(event.key==='Enter') artifactAskAi(document.getElementById('artifactAskAiBtn'))">
@@ -2060,7 +2080,7 @@
 
         async function loadRtmMatrix() {
             const container = document.getElementById('rtmTableContainer');
-            const statsEl = document.getElementById('rtmSummaryStats');
+            const kpiRow = document.getElementById('rtmKpiRow');
             if (!container) return;
             container.innerHTML = `<div class="text-[10px] text-slate-400 text-center py-8">Loading trace matrix...</div>`;
             try {
@@ -2070,20 +2090,21 @@
 
                 if (d.error) {
                     container.innerHTML = `<div class="text-[10px] text-rose-500 text-center py-8">${escapeHtml(d.error)}</div>`;
-                    if (statsEl) statsEl.textContent = '';
+                    if (kpiRow) kpiRow.innerHTML = '';
                     return;
                 }
 
                 const rows = d.rows || [];
-                const summary = d.summary || { total_requirements: 0, covered: 0, not_covered: 0, coverage_pct: 0 };
+                const summary = d.summary || { total_requirements: 0, covered: 0, not_covered: 0, coverage_pct: 0, test_executed: 0, test_pass: 0, test_fail: 0, test_pass_rate_pct: 0 };
 
-                if (statsEl) {
-                    statsEl.innerHTML = `
-                        <span><span class="font-bold text-slate-700">${summary.total_requirements}</span> Requirements</span>
-                        <span class="text-emerald-600"><span class="font-bold">${summary.covered}</span> Covered</span>
-                        <span class="text-rose-500"><span class="font-bold">${summary.not_covered}</span> Not Covered</span>
-                        <span class="font-bold text-slate-700">${summary.coverage_pct}% Coverage</span>
-                    `;
+                if (kpiRow) {
+                    kpiRow.innerHTML = [
+                        kpiTile('checklist', 'Requirements', summary.total_requirements, 'Story/Task total'),
+                        kpiTile('check_circle', 'Covered', summary.covered, 'has a test case'),
+                        kpiTile('cancel', 'Not Covered', summary.not_covered, 'no test case yet'),
+                        kpiTile('verified', 'Coverage', `${summary.coverage_pct}%`, `${summary.covered} of ${summary.total_requirements}`, summary.coverage_pct, 'bg-emerald-500'),
+                        kpiTile('fact_check', 'Test Pass Rate', summary.test_executed ? `${summary.test_pass_rate_pct}%` : '—', `${summary.test_pass} pass / ${summary.test_fail} fail`, summary.test_executed ? summary.test_pass_rate_pct : undefined, 'bg-emerald-500'),
+                    ].join('');
                 }
 
                 if (rows.length === 0) {
@@ -2524,12 +2545,9 @@
                 const k = d.kpis;
                 kpiRow.innerHTML = [
                     kpiTile('checklist', 'Requirements', k.total_requirements, `${k.total_work_items} total work items`),
-                    kpiTile('sync', 'Jira Sync Rate', `${k.sync_rate_pct}%`, `${k.jira_synced} of ${k.jira_total} synced`, k.sync_rate_pct, 'bg-blue-500'),
                     kpiTile('verified', 'Test Coverage', `${k.coverage_pct}%`, `${k.covered} of ${k.total_requirements} covered`, k.coverage_pct, 'bg-emerald-500'),
                     kpiTile('fact_check', 'Test Pass Rate', k.test_executed ? `${k.test_pass_rate_pct}%` : '—', `${k.test_pass} pass / ${k.test_fail} fail / ${k.test_not_run} not run`, k.test_executed ? k.test_pass_rate_pct : undefined, 'bg-emerald-500'),
                     kpiTile('history', 'Change Requests', k.cr_total, `${k.cr_during_build} during build · ${k.cr_post_live} post go-live`),
-                    kpiTile('description', 'Confluence Synced', k.confluence_synced_count, 'pages published'),
-                    kpiTile('view_kanban', 'Live in Jira', `${k.jira_open}/${k.jira_done}`, 'Open / Done'),
                 ].join('');
 
                 const workItemRows = (d.work_item_breakdown || []).map(x => ({ label: x.label, count: x.count }));
@@ -2853,6 +2871,7 @@
         // Live query of what pages actually exist right now in the Confluence space
         async function loadConfluenceLivePages() {
             const list = document.getElementById('confluenceLivePagesList');
+            const countEl = document.getElementById('artifactsConfluenceLiveCount');
             if (!list) return;
             list.innerHTML = `<div class="text-[10px] text-slate-400 text-center py-2">Loading...</div>`;
             try {
@@ -2861,8 +2880,10 @@
                 const data = await response.json();
                 if (!data.success) {
                     list.innerHTML = `<div class="text-[10px] text-rose-500 text-center py-2">${data.error || 'Could not load Confluence pages'}</div>`;
+                    if (countEl) countEl.textContent = '—';
                     return;
                 }
+                if (countEl) countEl.textContent = data.pages.length;
                 if (data.pages.length === 0) {
                     list.innerHTML = `<div class="text-[10px] text-slate-400 text-center py-2">No pages in the '${data.space_key}' space yet</div>`;
                     return;

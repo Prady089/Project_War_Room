@@ -2355,6 +2355,14 @@ async def get_rtm(project_id: str):
     total = len(item_ids)
     covered = len(covered_ids)
 
+    try:
+        test_cases = db.get_test_cases(project_id)
+    except Exception:
+        test_cases = []
+    test_pass = sum(1 for tc in test_cases if tc.get("status") == "Pass")
+    test_fail = sum(1 for tc in test_cases if tc.get("status") == "Fail")
+    test_executed = test_pass + test_fail
+
     return JSONResponse({
         "rows": rows,
         "summary": {
@@ -2362,6 +2370,10 @@ async def get_rtm(project_id: str):
             "covered": covered,
             "not_covered": total - covered,
             "coverage_pct": round((covered / total) * 100, 1) if total else 0,
+            "test_pass": test_pass,
+            "test_fail": test_fail,
+            "test_executed": test_executed,
+            "test_pass_rate_pct": round((test_pass / test_executed) * 100, 1) if test_executed else 0,
         }
     })
 
